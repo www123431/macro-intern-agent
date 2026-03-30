@@ -3,113 +3,92 @@ import requests
 import feedparser
 import google.generativeai as genai
 import google.api_core.exceptions
-import time
+import urllib.parse
 
 # 1. 页面基本设置
-st.set_page_config(page_title="Macro Intern Agent", layout="wide", page_icon="📊")
-st.title("📊 宏观经济每日分析 Agent")
+st.set_page_config(page_title="Macro Alpha Agent", layout="wide", page_icon="📈")
+st.title("🧪 Macro Alpha: 资深金融时政分析 Agent")
 
-# 2. 配置与 Secrets 读取
+# 2. 安全读取 Secrets
 try:
-    AV_KEY = st.secrets.get("AV_KEY")
     GNEWS_KEY = st.secrets.get("GNEWS_KEY")
-    # 兼容两种可能的 Key 命名
     GEMINI_KEY = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_KEY")
-
-    if not all([AV_KEY, GNEWS_KEY, GEMINI_KEY]):
-        st.error("❌ Secrets 配置不完整，请检查 .streamlit/secrets.toml 或 Streamlit Cloud 设置")
+    if not all([GNEWS_KEY, GEMINI_KEY]):
+        st.error("❌ 配置不完整")
         st.stop()
 except Exception as e:
-    st.error(f"❌ 读取配置时出错: {e}")
+    st.error(f"❌ 配置错误: {e}")
     st.stop()
 
-# 3. 初始化 Gemini (使用你列表里最稳健的模型)
+# 3. 初始化 Gemini
 genai.configure(api_key=GEMINI_KEY)
-# 建议使用 gemini-flash-latest，它会自动指向当前最稳定的 Flash 版本
 MODEL_NAME = 'gemini-flash-latest' 
 model = genai.GenerativeModel(MODEL_NAME)
 
-# 4. 数据抓取函数
-import urllib.parse
-
-def fetch_data():
+# 4. 深度数据抓取 (混合官方与媒体视角)
+def fetch_alpha_data():
     try:
-        # --- 1. 获取新加坡本地动态 (通过 Google News 定向搜索 MAS) ---
-        # 搜索语法：site:mas.gov.sg (只看官网内容)
-        query = urllib.parse.quote("site:mas.gov.sg")
-        google_news_rss = f"https://news.google.com/rss/search?q={query}&hl=en-SG&gl=SG&ceid=SG:en"
+        # 新加坡：混合官方与顶级媒体，搜索更具冲击力的关键词
+        # 搜索：(MAS官网 OR 海峡时报) + (货币政策 OR 经济前景 OR 银行业压力)
+        sg_query = urllib.parse.quote('(site:mas.gov.sg OR site:straitstimes.com) ("Monetary Policy" OR "Economic Outlook" OR "Inflation" OR "Banking")')
+        sg_rss = f"https://news.google.com/rss/search?q={sg_query}&hl=en-SG&gl=SG&ceid=SG:en"
         
+        # 全球：侧重宏观博弈
+        global_query = urllib.parse.quote('("Federal Reserve" OR "ECB" OR "China Stimulus") AND "Macro Strategy"')
+        global_url = f"https://gnews.io/api/v4/search?q={global_query}&lang=en&max=3&apikey={GNEWS_KEY}"
+
+        # 执行抓取
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(google_news_rss, headers=headers, timeout=10)
-        feed = feedparser.parse(response.content)
+        sg_res = requests.get(sg_rss, headers=headers, timeout=10)
+        sg_feed = feedparser.parse(sg_res.content)
         
-        # 提取前 3 条
-        mas_news = [f"- {e.title}" for e in feed.entries[:3]]
-        if not mas_news:
-            mas_news = ["暂时没有检索到 MAS 的最新网页更新"]
-
-        # --- 2. 获取全球宏观要闻 (保持 GNews 原样) ---
-        g_url = f"https://gnews.io/api/v4/search?q=macroeconomics&lang=en&max=3&apikey={GNEWS_KEY}"
-        g_res = requests.get(g_url, timeout=10).json()
-        articles = g_res.get('articles', [])
-        global_news = [f"- {a['title']} ({a['source']['name']})" for a in articles]
-        if not global_news:
-            global_news = ["暂时无法获取全球宏观新闻"]
-
-        return mas_news, global_news
-
+        gl_res = requests.get(global_url, timeout=10).json()
+        
+        sg_news = [f"- {e.title} ({e.source.get('title', 'Media')})" for e in sg_feed.entries[:4]]
+        gl_news = [f"- {a['title']} ({a['source']['name']})" for a in gl_res.get('articles', [])]
+        
+        return sg_news, gl_news
     except Exception as e:
         return [f"抓取异常: {e}"], ["获取失败"]
 
-# 5. 侧边栏与主触发逻辑
-st.sidebar.header("控制面板")
-if st.sidebar.button("💡 生成今日宏观分析"):
-    with st.spinner("Agent 正在阅读新闻并结合 CFA 框架进行分析..."):
-        mas, gbl = fetch_data()
+# 5. 主逻辑
+if st.sidebar.button("🚀 开启深度宏观研判"):
+    with st.spinner("正在构建宏观博弈模型..."):
+        sg_data, gl_data = fetch_alpha_data()
         
-        # 展示原始数据
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("🇸🇬 新加坡金管局动态")
-            for item in mas: st.write(item)
+            st.subheader("🇸🇬 新加坡核心变量")
+            for i in sg_data: st.caption(i)
         with col2:
-            st.subheader("🌎 全球宏观要闻")
-            for item in gbl: st.write(item)
+            st.subheader("🌎 全球宏观博弈")
+            for i in gl_data: st.caption(i)
             
         st.divider()
-        st.subheader(f"🧠 Agent 深度解读 ({MODEL_NAME})")
         
-        # 构建 Prompt
-        prompt = f"""
-        你是一名资深的金融宏观分析师。请基于以下最新资讯：
-        新加坡动态：{mas}
-        全球要闻：{gbl}
-        
-        请按照以下结构给出专业分析（使用中文）：
-        1. 核心趋势总结 (Executive Summary)
-        2. 潜在的市场风险或机遇 (请结合 CFA Level I 中的货币政策、财政政策或通胀框架进行分析)
-        3. 实习生建议：在今天的早会上，我应该重点关注哪些指标或话题？
+        # --- 资深分析师 Prompt ---
+        alpha_prompt = f"""
+        你是一名拥有20年经验的全球宏观首席策略师。请基于以下资讯进行穿透式分析：
+        新加坡变量：{sg_data}
+        全球环境：{gl_data}
+
+        请展现专业时政分析家的素养，拒绝教科书式的陈述，按以下逻辑输出：
+
+        一、 【破译信号】：不要复述新闻，请指出这些资讯背后的“预期差”在哪里？哪些是干扰杂音，哪些是真正的深层变量？
+        二、 【全球传导链】：分析全球宏观环境（如美联储或大国政策）如何通过利率、资本流向或贸易条件，对新加坡这个小型开放经济体产生“非线性”影响？
+        三、 【政策博弈】：基于当前动态，推测新加坡金管局（MAS）下一次政策窗口期的博弈重心是什么？（是防通胀的韧性，还是保增长的压力？）
+        四、 【资深建议】：如果今天你要在投行内部早会上发言，请给出一句能够穿透迷雾的核心结论。
+
+        注意：语气要冷峻、专业、充满洞见。
         """
         
-        # 6. 带错误处理的 AI 生成请求
         try:
-            response = model.generate_content(prompt)
-            if response.text:
-                st.markdown(response.text)
-            else:
-                st.warning("模型返回了空内容，请重试。")
-                
-        except google.api_core.exceptions.ResourceExhausted:
-            st.error("⚠️ [API 额度已耗尽] 免费版 Gemini 每分钟请求次数有限，请等待约 60 秒后再点击。")
-        except google.api_core.exceptions.InvalidArgument:
-            st.error("⚠️ [参数错误] 可能是模型名称无效，请检查代码中的 MODEL_NAME。")
+            response = model.generate_content(alpha_prompt)
+            st.markdown(response.text)
         except Exception as e:
-            st.error(f"⚠️ 发生未知错误: {e}")
-
+            st.error(f"分析失败: {e}")
 else:
-    st.info("👋 你好！点击左侧按钮，让 Agent 为你汇总今日宏观资讯并进行 CFA 视角的解读。")
-    st.caption(f"当前运行模型: {MODEL_NAME}")
+    st.info("点击左侧按钮，从资深策略师视角研判全球与本地宏观局势。")
 
-# 页脚
 st.markdown("---")
-st.caption("Powered by Gemini API | Designed for Business Analytics Interns")
+st.caption("Macro Alpha Agent | 高级金融时政研判工具")

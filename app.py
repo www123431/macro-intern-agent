@@ -268,56 +268,55 @@ with tab3:
             else:
                 st.warning("⚠️ 评估模块暂时无法访问，请检查连接。")
 with tab4:
-    st.header("⚡ 实时风险与组合监测 (Live Risk Monitor)")
+    st.header("⚡ 组合风险实时监测 (Live Portfolio Monitor)")
     
-    # 快速预设资产包
+    # 1. 定义专业资产包 (Advisors’ Clique 常用)
     asset_presets = {
-        "🇸🇬 新加坡核心 (SG Core)": ["DBSDF", "U11.SI", "V03.SI", "^STI"],
-        "🇺🇸 全球科技 (Global Tech)": ["NVDA", "AAPL", "MSFT", "^NDX"],
-        "🛡️ 避险组合 (Defensive)": ["GC=F", "TLT", "USDSGD=X"]
+        "🇸🇬 新加坡蓝筹 (SG Blue Chips)": ["DBSDF", "U11.SI", "V03.SI", "^STI"],
+        "🇺🇸 纳指科技 (Nasdaq Tech)": ["NVDA", "AAPL", "MSFT", "^NDX"],
+        "🛡️ 避险资产 (Safe Haven)": ["GC=F", "US10Y", "USDSGD=X"]
     }
     
-    preset_choice = st.selectbox("🎯 快速载入资产包", list(asset_presets.keys()))
-    current_tickers = asset_presets[preset_choice]
-
-    # 布局：左侧控制，右侧监控
+    # 2. 界面布局
     col_ctrl, col_main = st.columns([1, 3])
 
     with col_ctrl:
-        st.subheader("配置详情")
-        st.write(f"当前监测对象: `{', '.join(current_tickers)}`")
-        # 简化权重：默认平均分配，也可手动微调
-        auto_weight = 1.0 / len(current_tickers)
-        st.info(f"策略：等权重分配 ({auto_weight:.1%})")
+        st.subheader("🛠️ 控制面板")
+        preset_choice = st.selectbox("选择监测预设", list(asset_presets.keys()))
+        current_tickers = asset_presets[preset_choice]
         
-        run_monitor = st.button("🔄 刷新实时风险数据", use_container_width=True)
+        st.write(f"**成分股:** \n`{', '.join(current_tickers)}`")
+        
+        # 增加一个开关，控制是否开启“实时追踪模式”
+        run_monitor = st.button("🔄 执行实时回测", use_container_width=True, type="primary")
 
     with col_main:
         if run_monitor:
-            with st.spinner("同步全球市场波动率数据..."):
-                # 执行流水线：抓取 -> 计算 -> 优化
+            with st.status("正在同步全球数据中心...", expanded=True) as status:
+                # A. 抓取实时数据
                 mean_r, cov_m, raw_ret = QuantEngine.get_portfolio_stats(current_tickers)
-                weights = np.array([auto_weight] * len(current_tickers))
+                # 默认等权重计算
+                weights = np.array([1.0 / len(current_tickers)] * len(current_tickers))
                 ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(raw_ret, weights)
                 
-                # --- 极简仪表盘 ---
-                idx_col1, idx_col2, idx_col3 = st.columns(3)
-                idx_col1.metric("预期年化回报", f"{ann_r:.2%}")
-                idx_col2.metric("组合波动率", f"{ann_v:.2%}")
-                
-                # 动态变色的 VaR 指标
-                var_color = "normal" if abs(var) < 0.015 else "inverse"
-                idx_col3.metric("95% 隔夜风险 (VaR)", f"{var:.2%}", delta_color=var_color)
-                
-                # --- 实时走势归一化对比 ---
+                status.update(label="✅ 数据同步完成", state="complete", expanded=False)
+
+                # B. 核心指标仪表盘 (简洁排版)
+                st.subheader(f"📊 {preset_choice} 实时指标")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("预期年化收益", f"{ann_r:.2%}")
+                m2.metric("年化波动率", f"{ann_v:.2%}")
+                # 风险预警：如果 VaR 超过 1.5%，显示红色
+                var_status = "inverse" if abs(var) > 0.015 else "normal"
+                m3.metric("95% 隔夜 VaR", f"{var:.2%}", delta_color=var_status)
+
+                # C. 专业走势对比图 (Normalized)
                 st.write("---")
-                st.subheader("📈 资产归一化走势 (近 12M)")
-                # 将价格归一化到 100 起点，方便对比表现
-                normalized_price = (raw_ret + 1).cumprod() * 100
-                st.line_chart(normalized_price)
-
+                st.caption("🚀 资产收益率对齐 (Baseline: 100)")
+                # 归一化处理：让不同价格的资产在同一起跑线对比
+                norm_df = (1 + raw_ret).cumprod() * 100
+                st.line_chart(norm_df)
+                
         else:
-            st.light_box("等待指令... 点击左侧按钮开始实时监测数据流。")
-
-st.markdown("---")
-st.caption("注：所有数据均通过 yfinance 实时抓取。风险指标基于参数化 VaR 模型。")
+            # 💡 修复行：使用官方 st.info 替代报错的 light_box
+            st.info("💡 **操作指引**：请在左侧选择资产包，并点击“执行实时回测”以获取最新风险归因分析。")

@@ -267,6 +267,7 @@ with tab3:
                 st.download_button(label="📥 下载行业分析简报", data=report_data, file_name=f"Sector_Strategy_{datetime.date.today()}.docx")
             else:
                 st.warning("⚠️ 评估模块暂时无法访问，请检查连接。")
+# --- Tab 4 界面实现 (对接全新 QuantEngine 类) ---
 with tab4:
     st.header("⚡ 组合风险实时监测 (Live Portfolio Monitor)")
     
@@ -287,36 +288,53 @@ with tab4:
         
         st.write(f"**成分股:** \n`{', '.join(current_tickers)}`")
         
-        # 增加一个开关，控制是否开启“实时追踪模式”
+        # 执行回测按钮
         run_monitor = st.button("🔄 执行实时回测", use_container_width=True, type="primary")
 
     with col_main:
         if run_monitor:
-        with st.status("正在同步全球行情数据...", expanded=True) as status:
-            # 💡 关键修复：确保变量名与类方法返回的一一对应
-            # 返回 3 个值：均值、协方差矩阵、原始收益率序列
-            mean_r, cov_m, raw_ret = QuantEngine.get_portfolio_stats(current_tickers)
-            
-            # 设置等权重
-            weights = np.array([1.0 / len(current_tickers)] * len(current_tickers))
-            
-            # 计算风险指标 (确保 calculate_risk_metrics 接收 raw_ret 和 weights)
-            ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(raw_ret, weights)
-            
-            status.update(label="✅ 实时监测已就绪", state="complete", expanded=False)
+            with st.status("正在同步全球行情数据...", expanded=True) as status:
+                # 💡 调用重构后的方法：一次性抓取数据并返回三个核心对象
+                mean_r, cov_m, raw_ret = QuantEngine.get_portfolio_stats(current_tickers)
+                
+                if raw_ret is not None:
+                    # 自动设置等权重
+                    num_assets = len(current_tickers)
+                    weights = np.array([1.0 / num_assets] * num_assets)
+                    
+                    # 💡 调用一站式风险归因方法
+                    ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(raw_ret, weights)
+                    
+                    status.update(label="✅ 实时监测已就绪", state="complete", expanded=False)
 
-            # --- 以下是简洁的专业仪表盘 ---
-            st.subheader(f"📊 {preset_choice} 风险报告")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("预期年化收益", f"{ann_r:.2%}")
-            m2.metric("年化波动率", f"{ann_v:.2%}")
-            
-            # 风险预警色逻辑
-            var_color = "inverse" if abs(var) > 0.015 else "normal"
-            m3.metric("95% 隔夜 VaR", f"{var:.2%}", delta_color=var_color)
+                    # --- 专业仪表盘展示 ---
+                    st.subheader(f"📊 {preset_choice} 风险报告")
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("预期年化收益", f"{ann_r:.2%}")
+                    m2.metric("年化波动率", f"{ann_v:.2%}")
+                    
+                    # 风险预警色逻辑：如果单日 VaR 超过 1.5% 则变红提醒
+                    var_color = "inverse" if abs(var) > 0.015 else "normal"
+                    m3.metric("95% 隔夜 VaR", f"{var:.2%}", delta_color=var_color)
 
-            # 走势对比
-            st.write("---")
-            st.caption("📈 资产收益对齐 (Normalized Performance)")
-            norm_df = (1 + raw_ret).cumprod() * 100
-            st.line_chart(norm_df)
+                    # --- 归一化走势对比 (专业终端视觉) ---
+                    st.write("---")
+                    st.caption("📈 资产累计收益对齐 (Normalized Baseline: 100)")
+                    norm_df = (1 + raw_ret).cumprod() * 100
+                    st.line_chart(norm_df)
+                    
+                    # 补充一个简单的风险诊断提示
+                    with st.expander("📝 实时风险诊断"):
+                        st.write(f"**Sharpe Ratio:** {sharpe:.2f} (风险调整后收益)")
+                        st.write(f"**CVaR (预期缺口):** {cvar:.2%}")
+                        st.info("提示：此分析基于过去 252 个交易日的历史波动率外推。")
+                else:
+                    status.update(label="❌ 数据抓取失败", state="error")
+                    st.error("无法从雅虎财经获取数据，请检查网络或 Ticker 代码。")
+        else:
+            # 初始状态提示
+            st.info("💡 **操作指引**：在左侧选择资产包后，点击“执行实时回测”获取最新行情分析。")
+
+# 页面底部标记
+st.markdown("---")
+st.caption(f"Macro Alpha Terminal | 引擎状态: 实时连接 (yfinance) | 算法: Parametric VaR")

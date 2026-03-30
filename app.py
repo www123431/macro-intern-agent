@@ -18,7 +18,8 @@ except:
 
 # 3. 配置 Gemini
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-1.5-flash') 
+# 或者使用高性能版本：'gemini-1.5-pro'
 
 # --- 数据抓取函数 ---
 def fetch_data():

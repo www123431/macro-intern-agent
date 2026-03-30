@@ -6,3 +6,4 @@ google-generativeai
 yfinance
 plotly
 python-docx
+scipy

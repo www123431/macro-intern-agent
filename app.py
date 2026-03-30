@@ -9,6 +9,8 @@ import time
 import datetime
 from docx import Document
 from io import BytesIO
+import numpy as np
+from scipy.stats import norm
 
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")

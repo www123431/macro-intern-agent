@@ -111,9 +111,45 @@ def render_tv_medium_widget(symbol, title):
       </script>
     </div>"""
     components.html(render_code, height=360)
+    
+# --- 1. 量化计算引擎 (基于 Week 4, 5, 9 课程内容) ---
+class QuantEngine:
+    @staticmethod
+    def black_scholes_analysis(S, K, T, r, sigma, option_type='call'):
+        """Week 4 & 5: BSM 模型与 Delta 对冲计算"""
+        if T <= 0: return 0, 0
+        d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        
+        if option_type == 'call':
+            price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+            delta = norm.cdf(d1)
+        else:
+            price = K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+            delta = norm.cdf(d1) - 1
+        return price, delta
+
+    @staticmethod
+    def calculate_ewma_vol(returns, lam=0.94):
+        """Week 5: EWMA 动态波动率预测 (RiskMetrics 标准)"""
+        vols = np.zeros(len(returns))
+        vols[0] = np.var(returns)
+        for t in range(1, len(returns)):
+            vols[t] = lam * vols[t-1] + (1 - lam) * (returns[t-1]**2)
+        return np.sqrt(vols[-1])
+
+    @staticmethod
+    def capm_return(rf, beta, rm):
+        """Week 9: CAPM 预期回报率计算"""
+        return rf + beta * (rm - rf)
 
 # --- 8. 界面布局 ---
-tab1, tab2, tab3 = st.tabs(["🧠 首席宏观研判", "📈 实时全球仪表盘", "🛡️ 行业风险穿透"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🧠 首席宏观研判", 
+    "📈 实时全球仪表盘", 
+    "🛡️ 行业风险穿透", 
+    "🔢 量化工作台 (Quant Lab)"
+])
 
 with tab1:
     if st.sidebar.button("🚀 启动深度宏观研判"):
@@ -165,6 +201,51 @@ with tab3:
                 st.download_button(label="📥 下载行业分析简报", data=report_data, file_name=f"Sector_Strategy_{datetime.date.today()}.docx")
             else:
                 st.warning("⚠️ 评估模块暂时无法访问，请检查连接。")
+# --- [新界面] TAB 4: 量化工作台 ---
+with tab4:
+    st.header("🔢 课程理论实战：量化风险评估")
+    st.info("本模块集成 Week 4-9 核心算法：BSM Delta Hedging, EWMA Volatility & CAPM.")
+
+    # 第一部分：期权与对冲 (Week 4 & 5)
+    st.subheader("🎯 衍生品定价与 Delta 对冲 (Non-linear Risk)")
+    q_col1, q_col2, q_col3 = st.columns([1, 1, 2])
+    
+    with q_col1:
+        s_price = st.number_input("标的价格 (S)", value=100.0, step=1.0)
+        k_price = st.number_input("执行价格 (K)", value=100.0, step=1.0)
+    with q_col2:
+        t_expiry = st.slider("到期时间 (年)", 0.01, 1.0, 0.25)
+        sigma = st.number_input("隐含波动率 (σ)", value=0.20, step=0.01)
+    with q_col3:
+        r_rate = st.number_input("无风险利率 (r)", value=0.03)
+        opt_type = st.selectbox("期权类型", ["Call", "Put"])
+        
+        price, delta = QuantEngine.black_scholes_analysis(s_price, k_price, t_expiry, r_rate, sigma, opt_type.lower())
+        
+        st.metric(f"{opt_type} 理论价值", f"${price:.3f}")
+        st.metric("Delta (对冲比率)", f"{delta:.4f}")
+        st.warning(f"💡 **对冲策略**：若持有 10,000 份合约，需反向操作 {abs(int(delta * 10000))} 股现货以维持 Delta 中性。")
+
+    st.markdown("---")
+
+    # 第二部分：波动率与资产定价 (Week 5 & 9)
+    st.subheader("📊 波动率监控与 CAPM 定价")
+    v_col1, v_col2 = st.columns(2)
+    
+    with v_col1:
+        st.write("**动态波动率预测 (EWMA)**")
+        # 模拟新加坡海峡指数 (STI) 近期收益率
+        mock_data = np.random.normal(0, 0.015, 60)
+        current_vol = QuantEngine.calculate_ewma_vol(mock_data)
+        st.write(f"基于过去 60 日数据预测的下一日波动率: `{current_vol:.4%}`")
+        st.caption("注：使用 λ = 0.94 (Week 5 课程推荐值)")
+
+    with v_col2:
+        st.write("**资本资产定价模型 (CAPM)**")
+        beta = st.slider("资产 Beta 值", 0.5, 2.5, 1.1)
+        m_return = st.number_input("预期市场回报率 (Rm)", value=0.08)
+        expected_r = QuantEngine.capm_return(r_rate, beta, m_return)
+        st.success(f"该资产的理论预期回报率 (Ke): **{expected_r:.2%}**")
 
 st.markdown("---")
 st.caption(f"Macro Alpha v5.2 | 投研引擎: {MODEL_NAME} | 实习决策辅助")

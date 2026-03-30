@@ -114,15 +114,13 @@ def render_tv_medium_widget(symbol, title):
     </div>"""
     components.html(render_code, height=360)
     
-# --- 1. 量化计算引擎 (基于 Week 4, 5, 9 课程内容) ---
 class QuantEngine:
     @staticmethod
     def black_scholes_analysis(S, K, T, r, sigma, option_type='call'):
-        """Week 4 & 5: BSM 模型与 Delta 对冲计算"""
-        if T <= 0: return 0, 0
+        """希腊字母与定价引擎 (保持核心计算)"""
+        if T <= 0: return 0.0, 0.0
         d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
         d2 = d1 - sigma * np.sqrt(T)
-        
         if option_type == 'call':
             price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
             delta = norm.cdf(d1)
@@ -132,81 +130,63 @@ class QuantEngine:
         return price, delta
 
     @staticmethod
-    def calculate_ewma_vol(returns, lam=0.94):
-        """Week 5: EWMA 动态波动率预测 (RiskMetrics 标准)"""
-        vols = np.zeros(len(returns))
-        vols[0] = np.var(returns)
-        for t in range(1, len(returns)):
-            vols[t] = lam * vols[t-1] + (1 - lam) * (returns[t-1]**2)
-        return np.sqrt(vols[-1])
-
-    @staticmethod
-    def capm_return(rf, beta, rm):
-        """Week 9: CAPM 预期回报率计算"""
-        return rf + beta * (rm - rf)
-
-    @staticmethod
-    def calculate_var_cvar(returns, confidence_level=0.95):
-        """Week 9: 风险价值 (VaR) 与 预期缺口 (CVaR)"""
-        var = np.percentile(returns, (1 - confidence_level) * 100)
-        cvar = returns[returns <= var].mean()
-        return var, cvar
-
-    @staticmethod
     @st.cache_data(ttl=3600)
-    def get_realtime_metrics(ticker_list):
-        """抓取真实数据计算协方差矩阵 (Portfolio Perspective)"""
-        data = yf.download(ticker_list, period="1y")['Close']
+    def get_portfolio_stats(tickers):
+        """
+        统一数据源：实时抓取并返回年化统计量
+        返回: (年化收益, 协方差矩阵, 原始收益率序列)
+        """
+        if not tickers: return None, None, None
+        data = yf.download(tickers, period="1y", progress=False)['Close']
+        if isinstance(data, pd.Series): # 处理单个资产的情况
+            data = data.to_frame()
         returns = data.pct_change().dropna()
         
-        # 计算年化均值和协方差
         mean_returns = returns.mean() * 252
         cov_matrix = returns.cov() * 252
         return mean_returns, cov_matrix, returns
 
     @staticmethod
-    def portfolio_performance(weights, mean_returns, cov_matrix):
-        """组合层面表现计算"""
-        returns = np.sum(mean_returns * weights)
-        std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-        return returns, std
-
-    @staticmethod
-    @st.cache_data(ttl=3600)
-    def get_portfolio_data(tickers):
-        """实时抓取组合数据并计算基础量化指标"""
-        data = yf.download(tickers, period="1y")['Close']
-        returns = data.pct_change().dropna()
-        return returns
-
-    @staticmethod
     def calculate_risk_metrics(returns, weights, confidence=0.95):
-        """计算组合 VaR 和 CVaR (Week 9 核心)"""
+        """
+        一站式风险归因：计算组合层面的所有核心指标
+        """
+        # 组合日收益率序列
         port_returns = returns.dot(weights)
+        
+        # 核心指标计算
+        ann_return = port_returns.mean() * 252
+        ann_vol = port_returns.std() * np.sqrt(252)
+        sharpe = (ann_return - 0.03) / ann_vol if ann_vol != 0 else 0
+        
+        # 风险价值 (Parametric VaR)
         var = np.percentile(port_returns, (1 - confidence) * 100)
         cvar = port_returns[port_returns <= var].mean()
         
-        # 年化指标
-        ann_return = port_returns.mean() * 252
-        ann_vol = port_returns.std() * np.sqrt(252)
-        sharpe = (ann_return - 0.03) / ann_vol # 假设无风险利率 3%
-        
         return ann_return, ann_vol, sharpe, var, cvar
-        
+
     @staticmethod
     def optimize_portfolio(mean_returns, cov_matrix):
-        """寻找最大夏普比率的权重组合 (BA 核心课内容)"""
+        """
+        马科维茨优化器：寻找最大夏普比率组合
+        """
         num_assets = len(mean_returns)
-        args = (mean_returns, cov_matrix)
-        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
-        bounds = tuple((0, 1) for asset in range(num_assets))
         
-        def min_func_sharpe(weights, mean_returns, cov_matrix):
-            return -QuantEngine.portfolio_performance(weights, mean_returns, cov_matrix)[0] / \
-                   QuantEngine.portfolio_performance(weights, mean_returns, cov_matrix)[1]
+        def portfolio_std(weights, cov_matrix):
+            return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
 
-        result = minimize(min_func_sharpe, num_assets*[1./num_assets,], args=args,
-                        method='SLSQP', bounds=bounds, constraints=constraints)
+        def min_func_sharpe(weights, mean_returns, cov_matrix):
+            ret = np.sum(mean_returns * weights)
+            std = portfolio_std(weights, cov_matrix)
+            return -(ret - 0.03) / std # 最小化负夏普 = 最大化夏普
+
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((0, 1) for _ in range(num_assets))
+        initial_guess = num_assets * [1. / num_assets]
+
+        result = minimize(min_func_sharpe, initial_guess, 
+                          args=(mean_returns, cov_matrix),
+                          method='SLSQP', bounds=bounds, constraints=constraints)
         return result.x
         
 # --- 8. 界面布局 ---

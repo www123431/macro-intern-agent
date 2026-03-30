@@ -7,19 +7,25 @@ import google.generativeai as genai
 st.set_page_config(page_title="Macro Intern Agent", layout="wide")
 st.title("📊 宏观经济每日分析 Agent")
 
-# 2. 从 Secrets 读取 API Keys (部署后在网页后台配置)
+# --- 修改后的第 2 & 3 部分 ---
 try:
-    AV_KEY = st.secrets["AV_KEY"]
-    GNEWS_KEY = st.secrets["GNEWS_KEY"]
-    GEMINI_KEY = st.secrets["GEMINI_KEY"]
-except:
-    st.error("请确保 .streamlit/secrets.toml 中配置了 API Keys")
+    # 自动兼容你可能写的两种名字
+    AV_KEY = st.secrets.get("AV_KEY")
+    GNEWS_KEY = st.secrets.get("GNEWS_KEY")
+    # 这里优先读取你刚才说的 GEMINI_API_KEY
+    GEMINI_KEY = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_KEY")
+
+    if not all([AV_KEY, GNEWS_KEY, GEMINI_KEY]):
+        st.error("Secrets 配置不完整，请检查 .streamlit/secrets.toml")
+        st.stop()
+except Exception as e:
+    st.error(f"读取配置时出错: {e}")
     st.stop()
 
-# 3. 配置 Gemini
+# 配置 Gemini
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash') 
-# 或者使用高性能版本：'gemini-1.5-pro'
+# 使用最新的 1.5 系列模型
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- 数据抓取函数 ---
 def fetch_data():

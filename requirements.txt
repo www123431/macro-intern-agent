@@ -4,3 +4,4 @@ feedparser
 pandas
 google-generativeai
 yfinance
+plotly

@@ -193,6 +193,22 @@ class QuantEngine:
         
         return ann_return, ann_vol, sharpe, var, cvar
         
+    @staticmethod
+    def optimize_portfolio(mean_returns, cov_matrix):
+        """寻找最大夏普比率的权重组合 (BA 核心课内容)"""
+        num_assets = len(mean_returns)
+        args = (mean_returns, cov_matrix)
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((0, 1) for asset in range(num_assets))
+        
+        def min_func_sharpe(weights, mean_returns, cov_matrix):
+            return -QuantEngine.portfolio_performance(weights, mean_returns, cov_matrix)[0] / \
+                   QuantEngine.portfolio_performance(weights, mean_returns, cov_matrix)[1]
+
+        result = minimize(min_func_sharpe, num_assets*[1./num_assets,], args=args,
+                        method='SLSQP', bounds=bounds, constraints=constraints)
+        return result.x
+        
 # --- 8. 界面布局 ---
 tab1, tab2, tab3, tab4 = st.tabs([
     "🧠 首席宏观研判", 
@@ -303,3 +319,14 @@ with tab4:
                 
                 # 绘制累计收益对比图
                 st.line_chart((1 + returns.dot(weights)).cumprod())
+            # 在点击“运行”后增加以下展示
+st.subheader("🎯 最优配置建议 (AI Optimized)")
+opt_weights = QuantEngine.optimize_portfolio(mean_returns, cov_matrix)
+
+cols = st.columns(len(selected_tickers))
+for idx, ticker in enumerate(selected_tickers):
+    cols[idx].metric(ticker, f"{opt_weights[idx]:.1%}")
+
+st.write("---")
+st.subheader("🌪️ 风险归因 (Risk Contribution)")
+# 这里可以加一个简单的 Plotly 饼图显示各资产风险贡献

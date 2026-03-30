@@ -267,66 +267,98 @@ with tab3:
                 st.download_button(label="📥 下载行业分析简报", data=report_data, file_name=f"Sector_Strategy_{datetime.date.today()}.docx")
             else:
                 st.warning("⚠️ 评估模块暂时无法访问，请检查连接。")
-# --- Tab 4 界面重构 ---
+# --- Tab 4 界面重构 (v5.6 专业量化工作站) ---
 with tab4:
     st.header("🔢 基金组合量化压力测试")
-    st.markdown("基于 **Mean-Variance Optimization** 与 **Parametric VaR** 理论。")
+    st.info("基于现代投资组合理论 (MPT) 与 参数化风险价值 (VaR) 模型。")
 
     # 1. 资产选择与权重分配
     col_assets, col_config = st.columns([1, 2])
     
     with col_assets:
         st.subheader("📁 组合配置")
-        # 预设几个你实习相关的代码：STI, NDX, Gold, 还有你可能关注的 NVDA
         selected_tickers = st.multiselect(
             "选择组合成分", 
             ["^STI", "^NDX", "GC=F", "NVDA", "AAPL", "DBSDF"], 
-            default=["^STI", "^NDX", "GC=F"]
+            default=["^STI", "^NDX", "GC=F"],
+            key="quant_ticker_select"
         )
         
-        weights = []
+        user_weights = []
         if selected_tickers:
-            st.write("设置权重 (需总和为 100%)")
+            st.write("手动设置当前权重 (%)")
             for ticker in selected_tickers:
-                w = st.slider(f"权重: {ticker}", 0, 100, 100 // len(selected_tickers))
-                weights.append(w / 100)
+                w = st.slider(f"权重: {ticker}", 0, 100, 100 // len(selected_tickers), key=f"w_{ticker}")
+                user_weights.append(w / 100)
             
-            if sum(weights) != 1.0:
-                st.warning(f"⚠️ 当前权重总和: {sum(weights)*100:.1f}%，请调整至 100%")
+            total_w = sum(user_weights)
+            if abs(total_w - 1.0) > 0.001:
+                st.warning(f"⚠️ 当前权重总和: {total_w*100:.1f}%，请调整至 100% 以启动分析")
 
     with col_config:
-        if st.button("📈 运行组合压力测试") and sum(weights) == 1.0:
-            with st.spinner("正在回测历史相关性矩阵..."):
-                returns = QuantEngine.get_portfolio_data(selected_tickers)
-                ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(returns, np.array(weights))
-                
-                # 仪表盘显示
-                m1, m2, m3 = st.columns(3)
-                m1.metric("预期年化收益", f"{ann_r:.2%}")
-                m2.metric("年化波动率", f"{ann_v:.2%}")
-                m3.metric("夏普比率", f"{sharpe:.2f}")
-                
-                v1, v2 = st.columns(2)
-                v1.metric("95% 日度风险价值 (VaR)", f"{var:.2%}", delta_color="inverse")
-                v2.metric("预期缺口 (CVaR)", f"{cvar:.2%}", delta_color="inverse")
-                
-                st.write("---")
-                st.subheader("💡 风险诊断")
-                if sharpe > 1:
-                    st.success("该组合在历史回测中表现出极佳的风险收益比。")
-                if abs(var) > 0.02:
-                    st.error(f"极端预警：在市场波动下，该组合单日亏损可能超过 {abs(var):.2%}。")
-                
-                # 绘制累计收益对比图
-                st.line_chart((1 + returns.dot(weights)).cumprod())
-            # 在点击“运行”后增加以下展示
-st.subheader("🎯 最优配置建议 (AI Optimized)")
-opt_weights = QuantEngine.optimize_portfolio(mean_returns, cov_matrix)
+        # 只有在权重正确且按下按钮时才执行完整流水线
+        if st.button("🚀 运行深度量化审计") and abs(sum(user_weights) - 1.0) < 0.001:
+            with st.spinner("正在同步全球行情数据并执行马科维茨优化..."):
+                try:
+                    # A. 数据获取层
+                    # 直接获取 mean_returns 和 cov_matrix 解决 NameError
+                    import yfinance as yf
+                    data = yf.download(selected_tickers, period="1y", progress=False)['Close']
+                    returns = data.pct_change().dropna()
+                    mean_returns = returns.mean() * 252
+                    cov_matrix = returns.cov() * 252
+                    
+                    # B. 计算用户当前组合表现
+                    ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(returns, np.array(user_weights))
+                    
+                    # C. 运行马科维茨最优求解器
+                    opt_weights = QuantEngine.optimize_portfolio(mean_returns, cov_matrix)
+                    opt_r, opt_v = QuantEngine.portfolio_performance(opt_weights, mean_returns, cov_matrix)
+                    opt_sharpe = (opt_r - 0.03) / opt_v
 
-cols = st.columns(len(selected_tickers))
-for idx, ticker in enumerate(selected_tickers):
-    cols[idx].metric(ticker, f"{opt_weights[idx]:.1%}")
+                    # --- 结果展示区 ---
+                    # 1. 核心指标仪表盘
+                    st.subheader("📊 组合风险/回报概览")
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("预期年化收益", f"{ann_r:.2%}")
+                    m2.metric("年化波动率", f"{ann_v:.2%}")
+                    m3.metric("夏普比率", f"{sharpe:.2f}")
+                    m4.metric("95% 日度 VaR", f"{var:.2%}", delta_color="inverse")
 
-st.write("---")
-st.subheader("🌪️ 风险归因 (Risk Contribution)")
-# 这里可以加一个简单的 Plotly 饼图显示各资产风险贡献
+                    # 2. 优化建议区 (专业感核心)
+                    st.write("---")
+                    st.subheader("🎯 资产配置优化建议 (Mean-Variance Optimization)")
+                    
+                    # 使用两列对比手动权重与最优权重
+                    comp_col1, comp_col2 = st.columns(2)
+                    with comp_col1:
+                        st.write("**当前权重分配**")
+                        st.bar_chart(pd.Series(user_weights, index=selected_tickers))
+                    with comp_col2:
+                        st.write("**AI 建议最优分配**")
+                        st.bar_chart(pd.Series(opt_weights, index=selected_tickers))
+                    
+                    st.success(f"💡 优化结果：通过调整至 AI 建议权重，夏普比率可从 {sharpe:.2f} 提升至 **{opt_sharpe:.2f}**")
+
+                    # 3. 风险归因分析 (可视化升级)
+                    st.write("---")
+                    st.subheader("🌪️ 风险归因与累计收益")
+                    
+                    # 累计收益曲线
+                    cum_returns = (1 + returns.dot(user_weights)).cumprod()
+                    st.line_chart(cum_returns, use_container_width=True)
+                    
+                    # 简单的风险评价
+                    if abs(var) > 0.02:
+                        st.error(f"风险预警：当前组合在极端情况下，单日回撤风险较大 ({abs(var):.2%})。")
+                    else:
+                        st.info("风控状态：当前组合回撤风险在常规回测区间内。")
+
+                except Exception as e:
+                    st.error(f"量化引擎运行出错: {e}")
+        else:
+            # 初始占位界面
+            st.image("https://via.placeholder.com/800x400.png?text=Awaiting+Portfolio+Configuration", caption="请在左侧配置资产并确保权重总和为100%")
+
+st.markdown("---")
+st.caption(f"Macro Alpha v5.6 | 核心算法: SLSQP Optimizer | 实习生内部测试版")

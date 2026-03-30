@@ -292,31 +292,31 @@ with tab4:
 
     with col_main:
         if run_monitor:
-            with st.status("正在同步全球数据中心...", expanded=True) as status:
-                # A. 抓取实时数据
-                mean_r, cov_m, raw_ret = QuantEngine.get_portfolio_stats(current_tickers)
-                # 默认等权重计算
-                weights = np.array([1.0 / len(current_tickers)] * len(current_tickers))
-                ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(raw_ret, weights)
-                
-                status.update(label="✅ 数据同步完成", state="complete", expanded=False)
+        with st.status("正在同步全球行情数据...", expanded=True) as status:
+            # 💡 关键修复：确保变量名与类方法返回的一一对应
+            # 返回 3 个值：均值、协方差矩阵、原始收益率序列
+            mean_r, cov_m, raw_ret = QuantEngine.get_portfolio_stats(current_tickers)
+            
+            # 设置等权重
+            weights = np.array([1.0 / len(current_tickers)] * len(current_tickers))
+            
+            # 计算风险指标 (确保 calculate_risk_metrics 接收 raw_ret 和 weights)
+            ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(raw_ret, weights)
+            
+            status.update(label="✅ 实时监测已就绪", state="complete", expanded=False)
 
-                # B. 核心指标仪表盘 (简洁排版)
-                st.subheader(f"📊 {preset_choice} 实时指标")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("预期年化收益", f"{ann_r:.2%}")
-                m2.metric("年化波动率", f"{ann_v:.2%}")
-                # 风险预警：如果 VaR 超过 1.5%，显示红色
-                var_status = "inverse" if abs(var) > 0.015 else "normal"
-                m3.metric("95% 隔夜 VaR", f"{var:.2%}", delta_color=var_status)
+            # --- 以下是简洁的专业仪表盘 ---
+            st.subheader(f"📊 {preset_choice} 风险报告")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("预期年化收益", f"{ann_r:.2%}")
+            m2.metric("年化波动率", f"{ann_v:.2%}")
+            
+            # 风险预警色逻辑
+            var_color = "inverse" if abs(var) > 0.015 else "normal"
+            m3.metric("95% 隔夜 VaR", f"{var:.2%}", delta_color=var_color)
 
-                # C. 专业走势对比图 (Normalized)
-                st.write("---")
-                st.caption("🚀 资产收益率对齐 (Baseline: 100)")
-                # 归一化处理：让不同价格的资产在同一起跑线对比
-                norm_df = (1 + raw_ret).cumprod() * 100
-                st.line_chart(norm_df)
-                
-        else:
-            # 💡 修复行：使用官方 st.info 替代报错的 light_box
-            st.info("💡 **操作指引**：请在左侧选择资产包，并点击“执行实时回测”以获取最新风险归因分析。")
+            # 走势对比
+            st.write("---")
+            st.caption("📈 资产收益对齐 (Normalized Performance)")
+            norm_df = (1 + raw_ret).cumprod() * 100
+            st.line_chart(norm_df)

@@ -205,8 +205,8 @@ with tab3:
                 st.warning("⚠️ 评估模块暂时无法访问，请检查连接。")
 # --- [新界面] TAB 4: 量化工作台 ---
 with tab4:
-    st.header("🔢 课程理论实战：量化风险评估")
-    st.info("本模块集成 Week 4-9 核心算法：BSM Delta Hedging, EWMA Volatility & CAPM.")
+    st.header("🔢 量化风险评估")
+    st.info("BSM Delta Hedging, EWMA Volatility & CAPM.")
 
     # 第一部分：期权与对冲 (Week 4 & 5)
     st.subheader("🎯 衍生品定价与 Delta 对冲 (Non-linear Risk)")

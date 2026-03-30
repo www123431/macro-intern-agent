@@ -11,6 +11,7 @@ from docx import Document
 from io import BytesIO
 import numpy as np
 from scipy.stats import norm
+import yfinance as yf
 
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")
@@ -55,7 +56,33 @@ def generate_docx_report(content, title="Investment Memo"):
     doc.save(buffer)
     buffer.seek(0)
     return buffer
-
+@staticmethod
+    @st.cache_data(ttl=3600)
+    def get_portfolio_stats(ticker_list):
+        """抓取真实数据并返回年化统计量 (精简版)"""
+        # 💡 核心修复：在函数内部再次确保 yf 可用
+        import yfinance as yf 
+        import pandas as pd
+        
+        try:
+            # 抓取过去 1 年的收盘价
+            data = yf.download(ticker_list, period="1y", progress=False)['Close']
+            
+            # 容错处理：如果是单个资产返回的是 Series，需转为 DataFrame
+            if isinstance(data, pd.Series):
+                data = data.to_frame()
+                
+            returns = data.pct_change().dropna()
+            
+            # 计算年化均值和协方差 (252 个交易日)
+            mean_returns = returns.mean() * 252
+            cov_matrix = returns.cov() * 252
+            
+            return mean_returns, cov_matrix, returns
+        except Exception as e:
+            # 如果下载失败，打印日志并返回 None
+            print(f"Data Fetch Error: {e}")
+            return None, None, None
 # --- 5. 优雅的 AI 生成逻辑 ---
 @st.cache_data(ttl=3600) 
 def get_ai_analysis(prompt_type, sg_data, tech_data, geo_data):

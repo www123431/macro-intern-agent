@@ -170,6 +170,28 @@ class QuantEngine:
         returns = np.sum(mean_returns * weights)
         std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
         return returns, std
+
+    @staticmethod
+    @st.cache_data(ttl=3600)
+    def get_portfolio_data(tickers):
+        """实时抓取组合数据并计算基础量化指标"""
+        data = yf.download(tickers, period="1y")['Close']
+        returns = data.pct_change().dropna()
+        return returns
+
+    @staticmethod
+    def calculate_risk_metrics(returns, weights, confidence=0.95):
+        """计算组合 VaR 和 CVaR (Week 9 核心)"""
+        port_returns = returns.dot(weights)
+        var = np.percentile(port_returns, (1 - confidence) * 100)
+        cvar = port_returns[port_returns <= var].mean()
+        
+        # 年化指标
+        ann_return = port_returns.mean() * 252
+        ann_vol = port_returns.std() * np.sqrt(252)
+        sharpe = (ann_return - 0.03) / ann_vol # 假设无风险利率 3%
+        
+        return ann_return, ann_vol, sharpe, var, cvar
         
 # --- 8. 界面布局 ---
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -229,51 +251,55 @@ with tab3:
                 st.download_button(label="📥 下载行业分析简报", data=report_data, file_name=f"Sector_Strategy_{datetime.date.today()}.docx")
             else:
                 st.warning("⚠️ 评估模块暂时无法访问，请检查连接。")
-# --- [新界面] TAB 4: 量化工作台 ---
+# --- Tab 4 界面重构 ---
 with tab4:
-    st.header("🔢 量化风险评估")
-    st.info("BSM Delta Hedging, EWMA Volatility & CAPM.")
+    st.header("🔢 基金组合量化压力测试")
+    st.markdown("基于 **Mean-Variance Optimization** 与 **Parametric VaR** 理论。")
 
-    # 第一部分：期权与对冲 (Week 4 & 5)
-    st.subheader("🎯 衍生品定价与 Delta 对冲 (Non-linear Risk)")
-    q_col1, q_col2, q_col3 = st.columns([1, 1, 2])
+    # 1. 资产选择与权重分配
+    col_assets, col_config = st.columns([1, 2])
     
-    with q_col1:
-        s_price = st.number_input("标的价格 (S)", value=100.0, step=1.0)
-        k_price = st.number_input("执行价格 (K)", value=100.0, step=1.0)
-    with q_col2:
-        t_expiry = st.slider("到期时间 (年)", 0.01, 1.0, 0.25)
-        sigma = st.number_input("隐含波动率 (σ)", value=0.20, step=0.01)
-    with q_col3:
-        r_rate = st.number_input("无风险利率 (r)", value=0.03)
-        opt_type = st.selectbox("期权类型", ["Call", "Put"])
+    with col_assets:
+        st.subheader("📁 组合配置")
+        # 预设几个你实习相关的代码：STI, NDX, Gold, 还有你可能关注的 NVDA
+        selected_tickers = st.multiselect(
+            "选择组合成分", 
+            ["^STI", "^NDX", "GC=F", "NVDA", "AAPL", "DBSDF"], 
+            default=["^STI", "^NDX", "GC=F"]
+        )
         
-        price, delta = QuantEngine.black_scholes_analysis(s_price, k_price, t_expiry, r_rate, sigma, opt_type.lower())
-        
-        st.metric(f"{opt_type} 理论价值", f"${price:.3f}")
-        st.metric("Delta (对冲比率)", f"{delta:.4f}")
-        st.warning(f"💡 **对冲策略**：若持有 10,000 份合约，需反向操作 {abs(int(delta * 10000))} 股现货以维持 Delta 中性。")
+        weights = []
+        if selected_tickers:
+            st.write("设置权重 (需总和为 100%)")
+            for ticker in selected_tickers:
+                w = st.slider(f"权重: {ticker}", 0, 100, 100 // len(selected_tickers))
+                weights.append(w / 100)
+            
+            if sum(weights) != 1.0:
+                st.warning(f"⚠️ 当前权重总和: {sum(weights)*100:.1f}%，请调整至 100%")
 
-    st.markdown("---")
-
-    # 第二部分：波动率与资产定价 (Week 5 & 9)
-    st.subheader("📊 波动率监控与 CAPM 定价")
-    v_col1, v_col2 = st.columns(2)
-    
-    with v_col1:
-        st.write("**动态波动率预测 (EWMA)**")
-        # 模拟新加坡海峡指数 (STI) 近期收益率
-        mock_data = np.random.normal(0, 0.015, 60)
-        current_vol = QuantEngine.calculate_ewma_vol(mock_data)
-        st.write(f"基于过去 60 日数据预测的下一日波动率: `{current_vol:.4%}`")
-        st.caption("注：使用 λ = 0.94 (Week 5 课程推荐值)")
-
-    with v_col2:
-        st.write("**资本资产定价模型 (CAPM)**")
-        beta = st.slider("资产 Beta 值", 0.5, 2.5, 1.1)
-        m_return = st.number_input("预期市场回报率 (Rm)", value=0.08)
-        expected_r = QuantEngine.capm_return(r_rate, beta, m_return)
-        st.success(f"该资产的理论预期回报率 (Ke): **{expected_r:.2%}**")
-
-st.markdown("---")
-st.caption(f"Macro Alpha v5.2 | 投研引擎: {MODEL_NAME} | 实习决策辅助")
+    with col_config:
+        if st.button("📈 运行组合压力测试") and sum(weights) == 1.0:
+            with st.spinner("正在回测历史相关性矩阵..."):
+                returns = QuantEngine.get_portfolio_data(selected_tickers)
+                ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(returns, np.array(weights))
+                
+                # 仪表盘显示
+                m1, m2, m3 = st.columns(3)
+                m1.metric("预期年化收益", f"{ann_r:.2%}")
+                m2.metric("年化波动率", f"{ann_v:.2%}")
+                m3.metric("夏普比率", f"{sharpe:.2f}")
+                
+                v1, v2 = st.columns(2)
+                v1.metric("95% 日度风险价值 (VaR)", f"{var:.2%}", delta_color="inverse")
+                v2.metric("预期缺口 (CVaR)", f"{cvar:.2%}", delta_color="inverse")
+                
+                st.write("---")
+                st.subheader("💡 风险诊断")
+                if sharpe > 1:
+                    st.success("该组合在历史回测中表现出极佳的风险收益比。")
+                if abs(var) > 0.02:
+                    st.error(f"极端预警：在市场波动下，该组合单日亏损可能超过 {abs(var):.2%}。")
+                
+                # 绘制累计收益对比图
+                st.line_chart((1 + returns.dot(weights)).cumprod())

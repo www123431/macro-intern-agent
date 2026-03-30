@@ -9,6 +9,7 @@ from docx import Document
 from docx.shared import Inches
 from io import BytesIO
 import datetime
+import time
 
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")
@@ -50,19 +51,29 @@ def generate_report(analysis_text, report_type="Macro"):
     return buffer
 
 # --- 5. 核心分析函数 (带缓存) ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=1800)  # 延长缓存至1小时，减少消耗
 def get_ai_analysis(prompt_type, sg_data, tech_data, geo_data):
-    try:
-        # 更加专业的 Prompt 注入
-        if prompt_type == "macro":
-            full_prompt = f"作为常驻新加坡的首席策略师，基于以下资讯进行深度穿透，重点研判新元汇率(S$NEER)和通胀走势：{sg_data}, {geo_data}"
-        else:
-            full_prompt = f"分析 CPO、AI算力、地缘敏感商品及新加坡蓝筹。按【板块】-【建议】-【逻辑】输出：{tech_data} | {geo_data}"
-        
-        response = model.generate_content(full_prompt)
-        return response.text
-    except Exception as e:
-        return f"ERROR: {str(e)}"
+    max_retries = 3
+    retry_delay = 35  # 根据你的报错信息，等待35秒
+    
+    for attempt in range(max_retries):
+        try:
+            if prompt_type == "macro":
+                full_prompt = f"分析：{sg_data}, {geo_data}"
+            else:
+                full_prompt = f"行业分析：{tech_data} | {geo_data}"
+            
+            response = model.generate_content(full_prompt)
+            return response.text
+            
+        except google.api_core.exceptions.ResourceExhausted:
+            if attempt < max_retries - 1:
+                st.warning(f"⚠️ 达到配额上限，正在自动等待 {retry_delay} 秒后重试... (尝试 {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+            else:
+                return "❌ 今日 API 配额已耗尽，请明天再试或更换 API Key。"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
 
 # --- 6. 数据抓取 ---
 def fetch_macro_sector_data():

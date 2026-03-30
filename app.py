@@ -145,6 +145,32 @@ class QuantEngine:
         """Week 9: CAPM 预期回报率计算"""
         return rf + beta * (rm - rf)
 
+    @staticmethod
+    def calculate_var_cvar(returns, confidence_level=0.95):
+        """Week 9: 风险价值 (VaR) 与 预期缺口 (CVaR)"""
+        var = np.percentile(returns, (1 - confidence_level) * 100)
+        cvar = returns[returns <= var].mean()
+        return var, cvar
+
+    @staticmethod
+    @st.cache_data(ttl=3600)
+    def get_realtime_metrics(ticker_list):
+        """抓取真实数据计算协方差矩阵 (Portfolio Perspective)"""
+        data = yf.download(ticker_list, period="1y")['Close']
+        returns = data.pct_change().dropna()
+        
+        # 计算年化均值和协方差
+        mean_returns = returns.mean() * 252
+        cov_matrix = returns.cov() * 252
+        return mean_returns, cov_matrix, returns
+
+    @staticmethod
+    def portfolio_performance(weights, mean_returns, cov_matrix):
+        """组合层面表现计算"""
+        returns = np.sum(mean_returns * weights)
+        std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+        return returns, std
+        
 # --- 8. 界面布局 ---
 tab1, tab2, tab3, tab4 = st.tabs([
     "🧠 首席宏观研判", 

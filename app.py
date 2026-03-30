@@ -32,22 +32,41 @@ model = genai.GenerativeModel(MODEL_NAME)
 # 4. 数据抓取函数
 def fetch_data():
     try:
-        # A. MAS RSS (新加坡本地)
-        mas_feed = feedparser.parse("https://www.mas.gov.sg/rss/news-and-publications")
-        mas_news = [f"- {e.title}" for e in mas_feed.entries[:3]]
-        if not mas_news: mas_news = ["暂时无法获取 MAS 动态"]
+        # A. MAS RSS (更新为官方最新新闻地址)
+        # 注意：MAS 的 RSS 链接有时会带参数或重定向
+        mas_url = "https://www.mas.gov.sg/rss/news" 
         
-        # B. GNews (全球宏观)
+        # 使用 requests 先抓取内容，再交给 feedparser 解析（这样更稳定）
+        # 加入 headers 模拟浏览器访问，避免被屏蔽
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        mas_response = requests.get(mas_url, headers=headers, timeout=10)
+        mas_feed = feedparser.parse(mas_response.content)
+        
+        mas_news = [f"- {e.title}" for e in mas_feed.entries[:3]]
+        
+        # 如果还是空，尝试备用地址
+        if not mas_news:
+            backup_url = "https://www.mas.gov.sg/rss/monetary-policy"
+            backup_res = requests.get(backup_url, headers=headers)
+            backup_feed = feedparser.parse(backup_res.content)
+            mas_news = [f"- {e.title}" for e in backup_feed.entries[:3]]
+
+        if not mas_news: mas_news = ["MAS 官网暂无最新动态更新"]
+        
+        # B. GNews (保持不变)
         g_url = f"https://gnews.io/api/v4/search?q=macroeconomics&lang=en&max=3&apikey={GNEWS_KEY}"
-        g_res = requests.get(g_url).json()
+        g_res = requests.get(g_url, timeout=10).json()
         articles = g_res.get('articles', [])
         global_news = [f"- {a['title']} ({a['source']['name']})" for a in articles]
-        if not global_news: global_news = ["暂时无法获取全球新闻"]
         
         return mas_news, global_news
     except Exception as e:
-        st.warning(f"数据抓取出现小问题: {e}")
-        return ["数据获取失败"], ["数据获取失败"]
+        # 在控制台打印具体的错误，方便在 Streamlit Cloud Logs 查看
+        print(f"Error fetching data: {e}")
+        return [f"抓取失败: {str(e)[:50]}"], ["数据获取失败"]
 
 # 5. 侧边栏与主触发逻辑
 st.sidebar.header("控制面板")

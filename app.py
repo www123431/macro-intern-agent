@@ -26,7 +26,7 @@ except Exception as e:
 genai.configure(api_key=GEMINI_KEY)
 # 使用最新的 1.5 系列模型
 model = genai.GenerativeModel('gemini-1.5-flash')
-
+st.write(f"DEBUG: 正在使用的模型是 {model.model_name}")
 # --- 数据抓取函数 ---
 def fetch_data():
     # A. MAS RSS (新加坡本地)

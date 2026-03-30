@@ -30,59 +30,36 @@ MODEL_NAME = 'gemini-flash-latest'
 model = genai.GenerativeModel(MODEL_NAME)
 
 # 4. 数据抓取函数
+import urllib.parse
+
 def fetch_data():
-    mas_news = []
-    global_news = []
-    diag_info = [] # 用于存储诊断信息
-
-    # --- 1. 深度排查 MAS ---
-    mas_urls = [
-        "https://www.mas.gov.sg/rss/news",
-        "https://www.mas.gov.sg/rss/media-releases",
-        "https://www.mas.gov.sg/rss/monetary-policy"
-    ]
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/rss+xml, application/xml, text/xml, */*'
-    }
-
-    for url in mas_urls:
-        try:
-            res = requests.get(url, headers=headers, timeout=15)
-            status = res.status_code
-            content_snippet = res.text[:150].replace('\n', ' ')
-            
-            # 诊断记录
-            diag_info.append(f"URL: {url} | Status: {status} | Snippet: {content_snippet}")
-
-            if status == 200:
-                feed = feedparser.parse(res.content)
-                if feed.entries:
-                    mas_news = [f"- {e.title}" for e in feed.entries[:3]]
-                    break # 抓到一个有效的就跳出
-        except Exception as e:
-            diag_info.append(f"URL: {url} | Error: {str(e)}")
-
-    # 如果所有 RSS 都挂了，最后尝试直接爬网页 (备选方案)
-    if not mas_news:
-        diag_info.append("所有 RSS 链接均未返回有效数据，尝试备选方案...")
-        mas_news = ["MAS 官网 RSS 接口当前不可用，请稍后重试。"]
-
-    # --- 2. 抓取 GNews (保持不变) ---
     try:
+        # --- 1. 获取新加坡本地动态 (通过 Google News 定向搜索 MAS) ---
+        # 搜索语法：site:mas.gov.sg (只看官网内容)
+        query = urllib.parse.quote("site:mas.gov.sg")
+        google_news_rss = f"https://news.google.com/rss/search?q={query}&hl=en-SG&gl=SG&ceid=SG:en"
+        
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(google_news_rss, headers=headers, timeout=10)
+        feed = feedparser.parse(response.content)
+        
+        # 提取前 3 条
+        mas_news = [f"- {e.title}" for e in feed.entries[:3]]
+        if not mas_news:
+            mas_news = ["暂时没有检索到 MAS 的最新网页更新"]
+
+        # --- 2. 获取全球宏观要闻 (保持 GNews 原样) ---
         g_url = f"https://gnews.io/api/v4/search?q=macroeconomics&lang=en&max=3&apikey={GNEWS_KEY}"
         g_res = requests.get(g_url, timeout=10).json()
-        global_news = [f"- {a['title']} ({a['source']['name']})" for a in g_res.get('articles', [])]
+        articles = g_res.get('articles', [])
+        global_news = [f"- {a['title']} ({a['source']['name']})" for a in articles]
+        if not global_news:
+            global_news = ["暂时无法获取全球宏观新闻"]
+
+        return mas_news, global_news
+
     except Exception as e:
-        global_news = [f"GNews 获取失败: {e}"]
-
-    # 在界面上展示诊断信息（仅供排查时使用，稳定后可删除）
-    with st.expander("🛠️ MAS 抓取诊断日志 (排查完可删除)"):
-        for info in diag_info:
-            st.write(info)
-
-    return mas_news, global_news
+        return [f"抓取异常: {e}"], ["获取失败"]
 
 # 5. 侧边栏与主触发逻辑
 st.sidebar.header("控制面板")

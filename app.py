@@ -169,7 +169,29 @@ class QuantEngine:
             return 20.0  # 如果抓取失败，返回中值基准
         except:
             return 20.0
-
+def fetch_raw_data(tickers, period="1y"):
+    """
+    根据资产代码列表抓取历史收盘价
+    """
+    try:
+        if not tickers:
+            return pd.DataFrame()
+        
+        # 抓取数据（通常审计需要至少 1 年的数据来计算 VaR）
+        data = yf.download(tickers, period=period, interval="1d", progress=False)
+        
+        # 如果是多只股票，yf 返回的是 MultiIndex，提取 'Close' 列
+        if isinstance(data.columns, pd.MultiIndex):
+            close_prices = data['Close']
+        else:
+            close_prices = data[['Close']]
+            
+        # 清洗：填充空值
+        close_prices = close_prices.ffill().dropna()
+        return close_prices
+    except Exception as e:
+        st.error(f"数据抓取失败: {str(e)}")
+        return pd.DataFrame()
 
 # --- 5. 辅助功能 ---
 

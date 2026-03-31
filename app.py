@@ -709,7 +709,18 @@ with tab4:
 
 with tab5:
     st.header("🤖 全球资产扫描建议")
-    
+    # 1. 常驻扫描按钮：放在顶部，方便随时触发
+    if st.button("🚀 开启全行业自动扫描", type="primary", use_container_width=True, key="scan_btn_tab5"):
+        with st.spinner("正在穿透全球资产数据进行因子对齐..."):
+            # 这里调用你的扫描逻辑函数
+            # res = scanner.run_daily_scan() 
+            # st.session_state.scan_results = res
+            
+            # 清理旧的 AI 分析，确保重新生成
+            st.session_state.pop("ai_scan_analysis", None)
+            st.success("全行业扫描已完成，数据已更新。")
+            st.rerun()
+            
     # 1. 统一从 session_state 获取扫描结果
     # 注意：建议在侧边栏扫描逻辑中确保 scan_results 是一个包含 'name', 'sharpe', 'market_fit' 的字典
     res = st.session_state.get("scan_results") 
@@ -717,20 +728,6 @@ with tab5:
     # 情况 A: 还没有数据
     if not res:
         st.write("### 🔍 尚未开启扫描")
-        # --- 侧边栏修改 ---
-        if st.button("🤖 开启全行业自动扫描", type="primary", use_container_width=True):
-            with st.status("正在扫描全球市场板块...", expanded=True) as status:
-                scanner = MarketScanner()
-                top_asset = scanner.run_daily_scan() # 假设这里返回详细信息
-                
-                # 存储到 session_state
-                st.session_state.scan_results = top_asset 
-                st.session_state.target_assets = top_asset['name']
-                
-                status.update(label="扫描完成，建议已生成！", state="complete")
-            if "ai_scan_analysis" in st.session_state:
-                del st.session_state.ai_scan_analysis # 清除旧理由，强制 AI 为新资产生成新理由
-            st.rerun()
     
     # 情况 B: 已经有数据，开始渲染界面
     else:

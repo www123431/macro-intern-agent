@@ -528,6 +528,10 @@ with tab4:
     
     current_assets = list(PRESET_ASSETS.keys())
 
+    # --- 1. 资产定位 (仅用于初始化 UI 状态) ---
+    # 这一步是为了让“扫描”和“审计”联动，不影响 Agent 的独立性
+    scanned_asset = st.session_state.get("target_assets")
+    default_idx = current_assets.index(scanned_asset) if scanned_asset in current_assets else 0
 
     # 2. 紧凑的交互区
     c_left, c_right = st.columns([3, 1])

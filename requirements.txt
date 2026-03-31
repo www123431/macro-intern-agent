@@ -7,3 +7,4 @@ yfinance
 plotly
 python-docx
 scipy
+scikit-learn

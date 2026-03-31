@@ -702,7 +702,7 @@ with tab5:
         st.markdown("---") # 加一条分割线更清晰
         
         # 1. 口语化理由（你提供的代码）
-        with st.expander("📝 为什么 AI 建议关注该资产？", expanded=True):
+        with st.expander("📝 为什么建议关注该资产？", expanded=True):
             reasons = [
                 f"🔥 **动能强劲**：{top_asset} 过去一周的资金流入在所有板块中排名前 5%，属于典型的超跌反弹先锋。",
                 f"📊 **性价比高**：目前的夏普比率 (2.14) 远高于历史均值，意味着你承担的每一分风险都在超额换取回报。",

@@ -557,27 +557,33 @@ with tab3:
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     
-    # --- 1. 基础数据准备 ---
+    # 1. 核心逻辑：监听来自 Tab 5 的“传纸条”信号
+    # 如果检测到 auto_trigger，说明用户刚从 Tab 5 过来
+    if st.session_state.get("auto_trigger"):
+        # 将扫描到的资产设为当前目标
+        st.session_state["audit_target_sync"] = st.session_state.get("target_assets")
+        # ⚠️ 重要：清除触发标记，否则你会发现下拉框被“锁死”在扫描结果上改不动
+        st.session_state.auto_trigger = False 
+
     current_assets = list(PRESET_ASSETS.keys())
     
-    # --- 2. 状态同步逻辑 (核心修复点) ---
-    # 尝试从 session_state 获取扫描建议，如果没有则默认 0
-    # 这样既能实现“自动填表”，又保证了 default_index 永远存在
-    scanned_asset = st.session_state.get("target_assets")
-    default_index = current_assets.index(scanned_asset) if scanned_asset in current_assets else 0
+    # 2. 确定下拉框应该默认显示哪一个
+    # 优先级：Tab 5 传过来的值 > 之前选过的值 > 列表第一个
+    sync_asset = st.session_state.get("audit_target_sync")
+    if sync_asset in current_assets:
+        default_index = current_assets.index(sync_asset)
+    else:
+        default_index = 0
 
-    # --- 3. 极简交互区 ---
-    c_left, c_right = st.columns([3, 1])
-    with c_left:
-        # 这里定义的 choice 就是你“选的内容”
-        choice = st.selectbox(
-            "选择审计目标", 
-            current_assets, 
-            index=default_index, 
-            key="audit_asset_selector_v_final",
-            label_visibility="collapsed"
-        )
-    with c_right:
+    # 3. 渲染下拉框
+    # 注意：我们这里不直接在 selectbox 里写 key="target_assets"，防止冲突
+    choice = st.selectbox(
+        "选择审计目标", 
+        current_assets, 
+        index=default_index,
+        key="manual_audit_selector" # 换一个干净的 key
+    )
+    
         start_audit = st.button("🚀 启动深度审计", type="primary", use_container_width=True)
 
     # --- 4. 触发与执行 ---

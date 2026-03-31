@@ -716,14 +716,23 @@ with tab5:
     # 1. 常驻扫描按钮：放在顶部，方便随时触发
     if st.button("🚀 开启全行业自动扫描", type="primary", key="scan_btn_tab5"):
         with st.spinner("正在穿透全球资产数据进行因子对齐..."):
-            # 这里调用你的扫描逻辑函数
-            # res = scanner.run_daily_scan() 
-            # st.session_state.scan_results = res
-            
-            # 清理旧的 AI 分析，确保重新生成
-            st.session_state.pop("ai_scan_analysis", None)
-            st.success("全行业扫描已完成，数据已更新。")
-            st.rerun()
+            try:
+                scanner = MarketScanner() 
+                # 调用扫描方法（请确保你的 MarketScanner 类有这个方法，或者手动构造 res）
+                res = scanner.run_daily_scan() 
+                
+                # 将结果存入 session_state，否则刷新后数据就丢了
+                st.session_state.scan_results = res
+                
+                # 清理旧的 AI 分析，确保重新生成新资产的点评
+                if "ai_scan_analysis" in st.session_state:
+                    del st.session_state["ai_scan_analysis"]
+                
+                st.success(f"✅ 扫描完成！发现最佳机会：{res.get('name')}")
+                time.sleep(1) 
+                st.rerun() # 强制刷新页面以显示下方内容
+            except Exception as e:
+                st.error(f"扫描引擎启动失败: {e}")
             
     # 1. 统一从 session_state 获取扫描结果
     # 注意：建议在侧边栏扫描逻辑中确保 scan_results 是一个包含 'name', 'sharpe', 'market_fit' 的字典
@@ -731,7 +740,7 @@ with tab5:
 
     # 情况 A: 还没有数据
     if not res:
-        st.write("### 🔍 尚未开启扫描")
+        st.info("💡 点击上方按钮开始全市场因子扫描。")
     
     # 情况 B: 已经有数据，开始渲染界面
     else:

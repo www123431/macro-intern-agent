@@ -394,12 +394,21 @@ with tab1:
 
 with tab2:
     st.subheader("📊 全球资产实时走廊")
+    
+    # 第一排：黄金 vs 纳指
     col1, col2 = st.columns(2)
     with col1: render_tv_chart("OANDA:XAUUSD", "现货黄金")
     with col2: render_tv_chart("NASDAQ:NDX", "纳斯达克 100")
+    
+    # 第二排：海指 vs 汇率
     col3, col4 = st.columns(2)
     with col3: render_tv_chart("STI:STI", "海峡指数")
     with col4: render_tv_chart("FX_IDC:USDSGD", "美元/新币")
+
+    # 第三排：原油 vs 沪深300 (补回这两项)
+    col5, col6 = st.columns(2)
+    with col5: render_tv_chart("NYMEX:CL1!", "WTI 原油期货")
+    with col6: render_tv_chart("SSE:000300", "沪深 300 指数")
 
 with tab3:
     st.header("🛡️ 行业穿透与非对称风险评估")

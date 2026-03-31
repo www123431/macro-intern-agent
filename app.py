@@ -244,13 +244,30 @@ with tab4:
                 st.bar_chart(feat_importance, x="Factor", y="Weight")
 
             # AI 报告展示
+            # --- AI 审计结果与解释 ---
+            st.divider()
             if final_state['is_robust']:
-                st.divider()
                 st.subheader("🤖 AI 专家深度审计报告")
+                st.success("✅ 策略通过稳健性初步筛选，进入深度解读：")
                 st.markdown(final_state['audit_memo'])
-                st.download_button("📥 下载审计备忘录", generate_docx_report(final_state['audit_memo']), "Audit_Report.docx")
+                
+                # 下载按钮
+                st.download_button(
+                    "📥 下载审计备忘录", 
+                    generate_docx_report(final_state['audit_memo']), 
+                    f"Audit_{choice}_{datetime.date.today()}.docx"
+                )
             else:
-                st.warning("⚠️ Agent 审计终止：检测到回测数据存在显著 P-hacking 风险。")
+                st.subheader("⚠️ Agent 审计熔断")
+                st.error("检测到该策略存在显著的统计噪音风险（P-hacking），Agent 已拦截自动化结论。")
+                
+                # 给出具体改进建议
+                with st.expander("为什么我的策略被拦截？"):
+                    st.write(f"""
+                    1. **回测噪音系数**: {q['p_noise']:.2%} (阈值: 25%)
+                    2. **有效特征密度**: {q['active']} / {q['X'].shape[1]}
+                    3. **建议**: 减少滞后项因子的维度，或在 VIX 高波动期增加正则化强度。
+                    """)
 
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | Powered by LangGraph & Gemini 2.5 Flash")

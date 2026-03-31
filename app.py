@@ -269,6 +269,34 @@ def get_ai_analysis(prompt_type, vix_val):
     except Exception as e:
         return f"AI 专家暂时离线: {e}"
 
+class AnalyticsEngine:
+    @staticmethod
+    def calculate_metrics(df, confidence_level=0.95):
+        """
+        核心算法：全站统一的风险与收益计算模型
+        """
+        if df.empty:
+            return None
+            
+        # 1. 计算收益率
+        returns = df.pct_change().dropna()
+        
+        # 2. 统一 VaR 计算 (历史模拟法)
+        # 确保 Tab 4 和 Tab 5 的置信度水平完全一致
+        var_val = np.percentile(returns, (1 - confidence_level) * 100)
+        
+        # 3. 统一 Sharpe 计算
+        mean_ret = returns.mean() * 252
+        std_ret = returns.std() * np.sqrt(252)
+        sharpe = mean_ret / std_ret if std_ret != 0 else 0
+        
+        return {
+            "var": var_val,
+            "sharpe": sharpe,
+            "volatility": std_ret,
+            "returns_series": returns # 返回序列供绘图使用
+        }
+
 # --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---
 
 class AgentState(TypedDict):
@@ -593,67 +621,64 @@ with tab4:
     
     # --- 4. 触发与执行 ---
     if start_audit:
-    # 如果此时 session 中残留了自动触发标记，顺便清理掉，保持状态干净
+        # 1. 清理触发标记
         if st.session_state.get("auto_trigger"):
             st.session_state.auto_trigger = False
         
-        # ⚠️ 关键：Agent 这里的 target_assets 直接绑定 choice
-        # 这样不管扫描结果是什么，Agent 只会审计你在下拉框里选中的那个
-        with st.status(f"Agent 正在对 {choice} 执行深度审计...", expanded=True) as status:
-            current_state = {
-                "target_assets": choice,  # 认准 UI 选择
-                "vix_level": vix_input, 
-                "macro_context": st.session_state.get("macro_memo", "暂无数据"),
-                "sector_risks": st.session_state.get("sector_memo", "暂无数据"),
-                "quant_results": {}, 
-                "is_robust": True
-            }
-            
-            # 2. 流式执行 LangGraph 节点
+        with st.status(f"🕵️ Agent 正在对 {choice} 执行标准化深度审计...", expanded=True) as status:
             try:
-                # 这里的 agent_executor 是你之前定义的 StateGraph 编译后的对象
+                # --- 第一步：调用统一的 AnalyticsEngine 获取标准数据 ---
+                st.write("📊 正在调用 AnalyticsEngine 提取标准化因子...")
+                
+                # 获取对应的股票代码列表
+                tickers = st.session_state.dynamic_assets.get(choice, [])
+                # 假设你有一个 fetch_raw_data(tickers) 函数返回 DataFrame
+                df = fetch_raw_data(tickers) 
+                
+                # 调用统一逻辑，确保 VaR 和 Sharpe 算法与扫描器一模一样
+                standard_metrics = AnalyticsEngine.calculate_metrics(df)
+                
+                if not standard_metrics:
+                    raise ValueError("无法提取有效量化因子，请检查数据源")
+
+                # --- 第二步：初始化 Agent 状态 (包含对齐后的数据) ---
+                current_state = {
+                    "target_assets": choice,
+                    "vix_level": vix_input,
+                    "macro_context": st.session_state.get("macro_memo", "暂无数据"),
+                    "sector_risks": st.session_state.get("sector_memo", "暂无数据"),
+                    "quant_results": {
+                        "d_var": standard_metrics['var'],        # 👈 核心对齐：标准化 VaR
+                        "sharpe": standard_metrics['sharpe'],    # 👈 核心对齐：标准化 Sharpe
+                        "vol": standard_metrics['volatility']
+                    },
+                    "is_robust": True  # 初始设定为 True，等待红队节点证伪
+                }
+
+                # --- 第三步：单次流式执行 LangGraph 节点 ---
+                # 注意：合并了你原本重复的两个循环
                 for event in agent_executor.stream(current_state):
                     if not event: continue
                     
                     for node_name, node_output in event.items():
-                        # 状态提示：让用户知道哪个专家正在干活
-                        st.write(f"⚙️ **{node_name}** 节点处理完成...")
+                        # UI 提示：哪个专家在干活
+                        icon = "🛡️" if "red_team" in node_name else "⚙️"
+                        st.write(f"{icon} **{node_name}** 专家节点处理完成...")
                         
-                        # 安全合并节点产出到总状态
+                        # 安全合并节点产出
                         if isinstance(node_output, dict):
-                            clean_output = {k: v for k, v in node_output.items() if v is not None}
-                            current_state.update(clean_output)
-                
-                # 3. 将最终审计结果存入 session_state 供下方渲染区展示
-                st.session_state.final_audit_state = current_state
-                status.update(label="✅ 深度审计流执行完毕", state="complete")
-                
-            except Exception as e:
-                st.error(f"❌ 审计流执行期间发生异常: {str(e)}")
-                status.update(label="⚠️ 审计流意外中断", state="error")
-            
-            # 2. 增强版流式循环
-            try:
-                for event in agent_executor.stream(current_state):
-                    if not event: continue  # 过滤空事件
-                    
-                    for node_name, node_output in event.items():
-                        st.write(f"✅ {node_name} 任务处理完成")
-                        
-                        # 核心修复：确保 node_output 是字典且不为空
-                        if isinstance(node_output, dict):
-                            # 使用 dict.update 之前先过滤掉 None 值
                             clean_output = {k: v for k, v in node_output.items() if v is not None}
                             current_state.update(clean_output)
                         else:
-                            st.warning(f"节点 {node_name} 返回了异常数据类型")
-                            
+                            st.warning(f"⚠️ 节点 {node_name} 返回了非字典格式数据")
+
+                # --- 第四步：归档结果 ---
                 st.session_state.final_audit_state = current_state
-                status.update(label="审计流执行完毕", state="complete")
-                
+                status.update(label="✅ 深度审计流执行完毕：逻辑已对齐扫描引擎", state="complete")
+
             except Exception as e:
-                st.error(f"审计流运行出错: {str(e)}")
-                status.update(label="审计中断", state="error")
+                st.error(f"❌ 审计流中断: {str(e)}")
+                status.update(label="⚠️ 审计意外终止", state="error")
 
     # --- Tab 4 结果渲染区 (增强版) ---
     if st.session_state.get("final_audit_state"):

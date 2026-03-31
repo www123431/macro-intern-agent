@@ -523,64 +523,56 @@ with tab3:
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     
-    # --- 1. 资产列表与索引同步 ---
     current_assets = list(PRESET_ASSETS.keys())
     
-    # 核心逻辑：优先从 session_state 获取扫描器推荐的资产名
+    # --- 1. 获取并展示全行业扫描结果 ---
+    # 检查是否有从侧边栏传过来的扫描结果
     scanned_asset = st.session_state.get("target_assets")
-    if scanned_asset in current_assets:
-        default_index = current_assets.index(scanned_asset)
-    else:
-        default_index = 0
-
-    # --- 2. UI 交互组件 (唯一 Key) ---
-    c_left, c_right = st.columns([3, 1])
-    
-    with c_left:
-        # 这里使用 index=default_index 实现从“侧边栏扫描”到“审计室下拉框”的联动
-        choice = st.selectbox(
-            "选择审计资产包", 
-            current_assets, 
-            index=default_index, 
-            key="audit_asset_selector_final",
-            label_visibility="collapsed"
-        )
-        
-    with c_right:
-        start_audit = st.button(
-            "🚀 启动全自动审计流", 
-            type="primary", 
-            use_container_width=True,
-            key="run_audit_flow_btn_final"
-        )
-
-    # --- 3. 触发与状态重置逻辑 ---
-    # 获取侧边栏扫描器的触发标记
     auto_triggered = st.session_state.get("auto_trigger", False)
 
-    # 只要满足：手动点击按钮 OR 侧边栏自动触发
+    if scanned_asset:
+        # 增加一个漂亮的高亮展示区
+        st.markdown(f"""
+        <div style="background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%); 
+                    padding: 20px; border-radius: 10px; color: white; margin-bottom: 20px;">
+            <h3 style="margin:0; color: white;">🤖 智能扫描建议</h3>
+            <p style="margin:5px 0 0 0; opacity: 0.9;">
+                基于最新市场波动率与夏普比率分析，当前推荐审计目标：
+                <strong style="font-size: 1.2em; color: #fbbf24;">{scanned_asset}</strong>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # --- 2. 交互区逻辑 ---
+    # 自动计算下拉框索引
+    default_index = current_assets.index(scanned_asset) if scanned_asset in current_assets else 0
+
+    c_left, c_right = st.columns([3, 1])
+    with c_left:
+        choice = st.selectbox(
+            "手动调整审计目标", 
+            current_assets, 
+            index=default_index, 
+            key="audit_asset_selector_v5",
+            label_visibility="collapsed"
+        )
+    with c_right:
+        start_audit = st.button("🚀 启动全自动审计流", type="primary", use_container_width=True)
+
+    # --- 3. 审计流触发 ---
     if start_audit or auto_triggered:
-        
-        # ⚠️ 关键点：如果是自动触发，进入后立即将标记设为 False
-        # 这样可以防止下次 Streamlit 重新渲染时再次触发审计
+        # 进入后立即重置自动触发标记，但保留 target_assets 用于展示
         if auto_triggered:
             st.session_state.auto_trigger = False
         
-        # 实时同步最新的宏观和行业背景（确保 Agent 拿到的不是旧缓存）
-        macro_memo = st.session_state.get("macro_memo", "暂无最新宏观研判数据")
-        sector_memo = st.session_state.get("sector_memo", "暂无最新行业风险数据")
-            
+        # 确保 Agent 拿到的 choice 是最新的
         with st.status(f"Agent 正在对 {choice} 执行深度审计...", expanded=True) as status:
-            # 1. 初始化状态字典
             current_state = {
                 "target_assets": choice, 
                 "vix_level": vix_input, 
-                "macro_context": macro_memo,
-                "sector_risks": sector_memo,
+                "macro_context": st.session_state.get("macro_memo", "暂无数据"),
+                "sector_risks": st.session_state.get("sector_memo", "暂无数据"),
                 "quant_results": {}, 
-                "red_team_critique": "",
-                "technical_report": "", 
-                "audit_memo": "", 
                 "is_robust": True
             }
             

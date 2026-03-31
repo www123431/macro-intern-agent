@@ -74,6 +74,19 @@ class QuantEngine:
         dynamic_vaR = np.quantile(port_ret, min(alpha, 0.2))
         return dynamic_vaR, port_ret.mean() * 252, port_ret.std() * np.sqrt(252)
 
+    @staticmethod
+    def get_realtime_vix():
+        """从 Yahoo Finance 获取真实实时 VIX 数值"""
+        try:
+            vix_data = yf.download("^VIX", period="1d", progress=False)
+            if not vix_data.empty:
+                # 获取最新的收盘价
+                current_vix = vix_data['Close'].iloc[-1]
+                return round(float(current_vix), 2)
+            return 20.0  # 如果抓取失败，返回中值基准
+        except:
+            return 20.0
+    
 # --- 5. 辅助功能 ---
 
 def generate_docx_report(content, title="Investment Memo"):
@@ -145,10 +158,32 @@ agent_executor = builder.compile()
 # --- 7. 主界面布局 ---
 
 with st.sidebar:
-    st.header("⚙️ 指令中心")
-    vix_input = st.slider("市场 VIX 压力调节", 10.0, 50.0, 20.0)
+    st.header("⚙️ 智能环境配置")
+    
+    # 自动获取实时 VIX
+    real_vix = QuantEngine.get_realtime_vix()
+    
+    # 根据 VIX 数值自动定义风险等级
+    if real_vix < 15:
+        risk_level = "低波动 ( complacency )"
+        risk_color = "blue"
+    elif real_vix < 25:
+        risk_level = "常态波动 ( Normal )"
+        risk_color = "green"
+    elif real_vix < 35:
+        risk_level = "高波动 ( Panic )"
+        risk_color = "orange"
+    else:
+        risk_level = "极高风险 ( Crisis )"
+        risk_color = "red"
+
+    st.metric("实时 VIX 指数", real_vix, delta=f"{risk_level}", delta_color="normal")
+    
+    # 依然保留一个手动微调（可选），但默认值设为实时值
+    vix_input = st.number_input("环境压力修正 (默认为实时)", value=real_vix)
+    
     st.divider()
-    st.caption("Macro Alpha Pro | 2026 Edition")
+    st.caption("数据源: CBOE Real-time Index")
 
 tab1, tab2, tab3, tab4 = st.tabs(["🧠 首席宏观研判", "📈 实时仪表盘", "🛡️ 行业风险穿透", "🔢 量化审计室"])
 

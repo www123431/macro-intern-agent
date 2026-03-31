@@ -546,7 +546,7 @@ with tab4:
             "选择审计资产包", 
             list(PRESET_ASSETS.keys()), 
             index=default_index, # 刚才帮你加的自动索引
-            key="audit_assets_selector", # 👈 加上这个唯一的 key
+            key="audit_assets_selector_v2", # 👈 加上这个唯一的 key
             label_visibility="collapsed"
         )
     with c_right:
@@ -554,7 +554,7 @@ with tab4:
             "🚀 启动全自动审计流", 
             type="primary", 
             use_container_width=True,
-            key="main_audit_button_tab4"  # 👈 加上这个唯一的 ID
+            key="main_audit_button_v2"  # 👈 加上这个唯一的 ID
         )
 
     # 确保初始化状态

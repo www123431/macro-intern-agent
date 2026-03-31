@@ -782,10 +782,13 @@ with tab5:
         
         # 使用唯一 key 避免按钮冲突
         if st.button("🚀 立即将该资产送往 [量化审计室] 进行深度证伪", type="primary", key="send_to_audit_tab5"):
-            st.session_state.auto_trigger = True
-            st.session_state.target_assets = top_asset  # 同步 Tab 4 的下拉框
+            # 必须设置 Tab 4 逻辑里正在监听的那个中转变量
+            st.session_state["audit_target_sync"] = top_asset 
+            st.session_state["auto_trigger"] = True
+            
             st.toast(f"已将 {top_asset} 送往审计室！")
-            st.rerun() # 建议 rerun 以便其他 Tab 响应状态变化
+            time.sleep(0.5)
+            st.rerun()
 
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | 专注量化审计与合规决策")

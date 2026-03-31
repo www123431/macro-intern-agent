@@ -557,21 +557,25 @@ with tab3:
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     
-    # 1. 核心逻辑：监听来自 Tab 5 的“传纸条”信号
-    if st.session_state.get("auto_trigger"):
-        # 将扫描到的资产设为当前目标
-        st.session_state["audit_target_sync"] = st.session_state.get("target_assets")
-        # ⚠️ 重要：清除触发标记，防止下拉框被锁定
-        st.session_state.auto_trigger = False  
-
+    # 建立资产列表
     current_assets = list(PRESET_ASSETS.keys())
     
-    # 2. 确定下拉框默认值
-    sync_asset = st.session_state.get("audit_target_sync")
-    if sync_asset in current_assets:
-        default_index = current_assets.index(sync_asset)
-    else:
-        default_index = 0
+    # 检查是否有从 Tab 5 传来的同步请求
+    # 如果 manual_audit_selector 已经在 session_state 里（由 Tab 5 写入），
+    # selectbox 会自动跳转到该选项。
+    
+    choice = st.selectbox(
+        "选择审计目标", 
+        current_assets, 
+        key="manual_audit_selector" # 👈 关键：通过 key 自动同步
+    )
+    
+    # 如果是自动触发过来的，可以加一个自动运行的逻辑
+    if st.session_state.get("auto_trigger"):
+        st.info(f"🔄 已自动加载来自扫描器的资产：{choice}")
+        # 如果你想一过来就自动运行审计，可以在这里直接调用代码
+        # 但通常建议让用户点一下“启动深度审计”，给用户掌控感
+        st.session_state["auto_trigger"] = False # 重置标记位
 
     # 3. 渲染 UI
     choice = st.selectbox(

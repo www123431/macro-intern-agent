@@ -16,9 +16,6 @@ import yfinance as yf
 from sklearn.manifold import Isomap
 from sklearn.linear_model import LassoCV
 
-# 临时插入这段代码进行测试
-available_models = [m.name for m in genai.list_models()]
-st.write(f"当前环境下可用的模型: {available_models}")
 
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")

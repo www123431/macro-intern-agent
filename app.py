@@ -706,7 +706,7 @@ with tab4:
 
 with tab5:
     st.header("🤖 全球资产扫描建议")
-    
+    res = st.session_state.get("scan_results")
     # 从 session_state 获取扫描结果
     # 假设 scanner.run_daily_scan() 返回的是一个包含多个资产信息的 List 或 Dict
     scan_data = st.session_state.get("scan_results") 
@@ -726,7 +726,6 @@ with tab5:
         col_s2.metric("预期夏普比率", "2.14", delta="高收益区间")
         col_s3.metric("市场契合度", "92%", delta="优选")
 
-        res = st.session_state.get("scan_results")
     
         if not res:
             st.info("💡 请点击侧边栏的 **[开启全行业自动扫描]** 按钮，获取实时投资机会。")

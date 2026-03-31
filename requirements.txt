@@ -8,3 +8,5 @@ plotly
 python-docx
 scipy
 scikit-learn
+langgraph
+langchain_google_genai

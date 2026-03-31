@@ -550,11 +550,10 @@ with tab4:
         start_audit = st.button("🚀 启动深度审计", type="primary", use_container_width=True)
 
     # --- 4. 触发与执行 ---
-    auto_triggered = st.session_state.get("auto_trigger", False)
-
-    if start_audit or auto_triggered:
-        if auto_triggered:
-            st.session_state.auto_trigger = False
+    if start_audit:
+    # 如果此时 session 中残留了自动触发标记，顺便清理掉，保持状态干净
+    if st.session_state.get("auto_trigger"):
+        st.session_state.auto_trigger = False
         
         # ⚠️ 关键：Agent 这里的 target_assets 直接绑定 choice
         # 这样不管扫描结果是什么，Agent 只会审计你在下拉框里选中的那个

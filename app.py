@@ -461,27 +461,22 @@ with st.sidebar:
     st.info("💡 **系统状态**: 当前处于【首席审计模式】，Agent 将优先检查统计稳健性。")
     st.caption("数据源: CBOE Real-time / Yahoo Finance")
 
-    # --- 侧边栏：全行业自动扫描按钮 ---
-    if st.sidebar.button("🤖 开启全行业自动扫描"):
-        with st.status("正在扫描全球市场板块...", expanded=True) as status:
-            # 1. 运行独立的扫描引擎
-            scanner = MarketScanner()
-            top_asset = scanner.run_daily_scan()
-            
-            st.write(f"✅ 扫描完成！发现高夏普比率机会：**{top_asset['name']}**")
-            
-            # 2. 自动同步到全局状态
-            # 这里确保你的资产选择下拉框 (selectbox) 的 index 会随之改变
-            st.session_state.target_assets = top_asset['name']
-            
-            # 3. 核心触发逻辑：模拟“点击启动审计流”的行为
-            # 我们设置一个标记位，让主页面感知到需要自动开始
-            st.session_state.auto_trigger = True 
-            
-            status.update(label=f"已定位 {top_asset['name']}，正在初始化深度审计流...", state="complete")
+    # --- 找到侧边栏“🤖 开启全行业自动扫描”部分 ---
+if st.sidebar.button("🤖 开启全行业自动扫描"):
+    with st.status("正在扫描全球市场板块...", expanded=True) as status:
+        scanner = MarketScanner()
+        top_asset = scanner.run_daily_scan()
         
-        # 强制 Streamlit 重新运行以触发主界面的业务逻辑
-        st.rerun()
+        # 1. 更新资产名
+        st.session_state.target_assets = top_asset['name']
+        # 2. 标记自动触发
+        st.session_state.auto_trigger = True 
+        # 3. 重要：清空旧的审计结果，防止新老数据混杂
+        st.session_state.final_audit_state = None 
+        
+        status.update(label=f"已定位 {top_asset['name']}，正在初始化...", state="complete")
+    
+    st.rerun()
 
 # 使用分栏美化 Tab 标题
 tab1, tab2, tab3, tab4 = st.tabs(["🧠 首席宏观研判", "📈 实时仪表盘", "🛡️ 行业风险穿透", "🔢 量化审计室"])
@@ -527,61 +522,90 @@ with tab3:
 
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
-    # 【修改点 1】：如果 auto_mode 开启，默认选择扫描到的资产
+    
+    # --- 1. 资产列表与索引同步 ---
     current_assets = list(PRESET_ASSETS.keys())
-    default_index = 0
-    if st.session_state.get("target_assets") in current_assets:
-        default_index = current_assets.index(st.session_state.target_assets)
+    
+    # 核心逻辑：优先从 session_state 获取扫描器推荐的资产名
+    scanned_asset = st.session_state.get("target_assets")
+    if scanned_asset in current_assets:
+        default_index = current_assets.index(scanned_asset)
+    else:
+        default_index = 0
 
-    # 2. 顶部交互区：合并为一个 Row
+    # --- 2. UI 交互组件 (唯一 Key) ---
     c_left, c_right = st.columns([3, 1])
     
     with c_left:
-        # 使用唯一 key 确保状态稳定
+        # 这里使用 index=default_index 实现从“侧边栏扫描”到“审计室下拉框”的联动
         choice = st.selectbox(
             "选择审计资产包", 
             current_assets, 
             index=default_index, 
-            key="audit_asset_selector",
+            key="audit_asset_selector_final",
             label_visibility="collapsed"
         )
         
     with c_right:
-        # 这里的 start_audit 会捕捉手动点击
         start_audit = st.button(
             "🚀 启动全自动审计流", 
             type="primary", 
             use_container_width=True,
-            key="run_audit_flow_btn"
+            key="run_audit_flow_btn_final"
         )
 
-    # 3. 触发逻辑合并
-    # 只要满足：[手动点击按钮] OR [侧边栏触发了自动模式] 其中之一，就开启审计
+    # --- 3. 触发与状态重置逻辑 ---
+    # 获取侧边栏扫描器的触发标记
     auto_triggered = st.session_state.get("auto_trigger", False)
 
-    # 如果点击了按钮 OR 侧边栏扫描器发出了自动指令
+    # 只要满足：手动点击按钮 OR 侧边栏自动触发
     if start_audit or auto_triggered:
         
-        # --- 关键修改点 2：进入后立刻重置自动模式，防止无限循环运行 ---
+        # ⚠️ 关键点：如果是自动触发，进入后立即将标记设为 False
+        # 这样可以防止下次 Streamlit 重新渲染时再次触发审计
         if auto_triggered:
-            st.session_state.auto_mode = True
+            st.session_state.auto_trigger = False
+        
+        # 实时同步最新的宏观和行业背景（确保 Agent 拿到的不是旧缓存）
+        macro_memo = st.session_state.get("macro_memo", "暂无最新宏观研判数据")
+        sector_memo = st.session_state.get("sector_memo", "暂无最新行业风险数据")
             
-        with st.status("Agent 正在协同专家组...", expanded=True) as status:
-            # 1. 严格初始化状态
-            # 注意：这里的 choice 会自动获取当前 selectbox 选中的值
-            # 由于我们在侧边栏已经改了 st.session_state.target_assets，
-            # 此时的 choice 已经是扫描器选出的新资产了。
+        with st.status(f"Agent 正在对 {choice} 执行深度审计...", expanded=True) as status:
+            # 1. 初始化状态字典
             current_state = {
                 "target_assets": choice, 
                 "vix_level": vix_input, 
-                "macro_context": st.session_state.get("macro_memo", "暂无数据"),
-                "sector_risks": st.session_state.get("sector_memo", "暂无数据"),
+                "macro_context": macro_memo,
+                "sector_risks": sector_memo,
                 "quant_results": {}, 
                 "red_team_critique": "",
                 "technical_report": "", 
                 "audit_memo": "", 
                 "is_robust": True
             }
+            
+            # 2. 流式执行 LangGraph 节点
+            try:
+                # 这里的 agent_executor 是你之前定义的 StateGraph 编译后的对象
+                for event in agent_executor.stream(current_state):
+                    if not event: continue
+                    
+                    for node_name, node_output in event.items():
+                        # 状态提示：让用户知道哪个专家正在干活
+                        st.write(f"⚙️ **{node_name}** 节点处理完成...")
+                        
+                        # 安全合并节点产出到总状态
+                        if isinstance(node_output, dict):
+                            clean_output = {k: v for k, v in node_output.items() if v is not None}
+                            current_state.update(clean_output)
+                
+                # 3. 将最终审计结果存入 session_state 供下方渲染区展示
+                st.session_state.final_audit_state = current_state
+                status.update(label="✅ 深度审计流执行完毕", state="complete")
+                
+            except Exception as e:
+                st.error(f"❌ 审计流执行期间发生异常: {str(e)}")
+                status.update(label="⚠️ 审计流意外中断", state="error")
             
             # 2. 增强版流式循环
             try:

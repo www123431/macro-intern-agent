@@ -478,79 +478,68 @@ with tab4:
     # 结果渲染区
     if st.session_state.final_audit_state:
         s = st.session_state.final_audit_state
-        if s.get("quant_results"):
-            q = s['quant_results']
+        q = s.get('quant_results', {})
+        
+        if q:
             score = q.get('confidence_score', 0)
             
-            # --- 第一层：置信度仪表盘 ---
+            # --- 第一层：审计概览 (Audit Overview) ---
             st.divider()
-            score_col, status_col = st.columns([1, 2])
-            with score_col:
+            col_score, col_status = st.columns([1, 2])
+            with col_score:
                 st.metric("审计置信度", f"{int(score)}/100")
-            with status_col:
+            with col_status:
                 res_color = "green" if score >= 80 else "orange" if score >= 50 else "red"
-                res_label = "💎 高度可信 (High Integrity)" if score >= 80 else "⚠️ 中度参考 (Cautionary)" if score >= 50 else "🚨 统计噪音警报 (Low)"
+                res_label = "💎 高度可信" if score >= 80 else "⚠️ 中度参考" if score >= 50 else "🚨 统计噪音警报"
                 st.markdown(f"<h2 style='color:{res_color}; margin-top:0;'>{res_label}</h2>", unsafe_allow_html=True)
-            
-            if score < 60:
-                st.warning("⚠️ **风控提示**: 当前样本量或特征稀疏度触发预警，模型可能处于‘过拟合’边缘。")
 
-            # --- 第二层：决策建议 (Executive Summary) ---
-            # 💡 修改点：只要有 audit_memo 就渲染，但增加红队警示
-            if s.get("audit_memo"):
-                memo_parts = s["audit_memo"].split("###")
+            # --- 第二层：首席执行决策建议 (Executive Summary) ---
+            if s.get("audit_memo") and s.get("is_robust"):
                 st.subheader("💡 首席执行决策建议")
-                
-                # 渲染执行摘要
+                memo_parts = s["audit_memo"].split("###")
                 exec_txt = memo_parts[1] if len(memo_parts) > 1 else s["audit_memo"]
                 
-                # 🔴 关键逻辑：如果技术报告中包含红队警报标识，则使用警告色
+                # 如果红队有警告，决策建议框变黄，增加紧迫感
                 if "🔴" in s.get("technical_report", ""):
-                    st.warning(f"**红队风控警示：**\n{exec_txt}")
-                    st.error("🚨 **审计检测到逻辑风险**：红队已在下方‘对抗性审计详情’中列出潜在统计漏洞。")
+                    st.warning(f"**【风控提示版】**\n{exec_txt}")
                 else:
                     st.info(exec_txt)
 
-                # --- 🔍 新增：红队对抗性详情展示 ---
-                with st.expander("🛡️ 对抗性审计详情 (Red Team Critique)", expanded=True):
+                # --- 第三层：红队对抗与原始审计 (主体分层布局) ---
+                st.subheader("🛡️ 审计深度穿透 (Audit Deep-Dive)")
+                
+                # 使用两列布局对比“红队质疑”与“原始审计”
+                audit_col1, audit_col2 = st.columns(2)
+                
+                with audit_col1:
+                    st.markdown("#### 🚩 红队对抗性审查")
                     if "【红队对抗性审查】" in s.get("technical_report", ""):
-                        # 提取红队部分（通常在技术报告末尾）
-                        critique_part = s["technical_report"].split("【红队对抗性审查】")[-1]
-                        st.markdown(critique_part)
+                        critique = s["technical_report"].split("【红队对抗性审查】")[-1]
+                        st.markdown(f"""<div style="background-color:#FFF5F5; padding:15px; border-radius:10px; border:1px solid #FEB2B2;">
+                            {critique}</div>""", unsafe_allow_html=True)
                     else:
                         st.success("🟢 红队扫描完毕：未发现明显统计性漏洞。")
 
-                # --- 第三层：核心指标横向对比 ---
+                with audit_col2:
+                    st.markdown("#### 📝 原始技术审计意见")
+                    raw_tech = s.get("technical_report", "").split("【红队对抗性审查】")[0]
+                    st.markdown(f"""<div style="background-color:#F8FAFC; padding:15px; border-radius:10px; border:1px solid #E2E8F0; color:#475569; font-size:0.9em;">
+                        {raw_tech if raw_tech else "技术审计内容生成中..."}</div>""", unsafe_allow_html=True)
+
+                # --- 第四层：核心指标与可视化 ---
                 st.subheader("🔍 关键洞察 (Key Insights)")
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("压力回撤 (VaR)", f"{q['d_var']:.2%}", help="95%置信度下的潜在损失")
                 k2.metric("信号纯净度", f"{q['sparsity']:.1%}", help="有效因子占比")
                 k3.metric("统计真实信度", f"{q['p_noise']:.1%}", help="排除P-hacking后的真实性")
-                
-                # 修复可能出现的除以零风险
-                sharpe = (q['a_ret'] - 0.03) / q['a_vol'] if q['a_vol'] > 0 else 0
-                k4.metric("夏普比率(预估)", f"{sharpe:.2f}")
+                k4.metric("夏普比率", f"{(q['a_ret']-0.03)/q['a_vol']:.2f}" if q['a_vol']>0 else "0.00")
 
-                # --- 第四层：技术底层透明化 ---
-                with st.expander("🔬 查看量化审计技术细节 (Quant Tech Stack)"):
-                    g1, g2 = st.columns([2, 1])
-                    with g1:
-                        st.markdown("**🧬 因子贡献权重 (Lasso Coefficients)**")
-                        chart_data = pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']})
-                        st.bar_chart(chart_data, x="Factor", y="Weight")
-                    with g2:
-                        st.markdown("**📝 原始审计意见**")
-                        # 只显示除了红队之外的技术内容，避免重复
-                        raw_tech = s.get("technical_report", "").split("【红队对抗性审查】")[0]
-                        st.caption(raw_tech if raw_tech else "技术审计未生成")
-                    
+                with st.expander("🔬 查看因子权重与下载报告"):
+                    st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")
                     st.download_button("📥 下载正式审计备忘录 (.docx)", 
                                      generate_docx_report(s["audit_memo"], "Investment Audit Memo"), 
                                      "Audit_Report.docx", use_container_width=True)
             else:
-                # 彻底拦截的情况
                 st.error("⚠️ **审计拦截**: 由于红队判定该策略不稳健（统计噪音或过拟合风险过高），系统已拦截决策建议生成。")
-                st.markdown(f"**当前 P-hacking 风险值**: `{q['p_noise']:.2%}` | **红队拦截阈值**: `25.00%` ")
-
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | 专注量化审计与合规决策")

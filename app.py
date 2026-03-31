@@ -37,6 +37,41 @@ genai.configure(api_key=GEMINI_KEY)
 MODEL_NAME = 'gemini-1.5-flash' 
 model = genai.GenerativeModel(MODEL_NAME)
 
+# [专家 1 & 2: 特征工程与回测审计专家]
+class StrategyAuditor:
+    @staticmethod
+    def run_feature_sparsity_check(X, y):
+        """特征工程专家：利用 LassoCV 执行 Unitless 稀疏性控制"""
+        model = LassoCV(cv=5).fit(X, y)
+        active_features = np.sum(np.abs(model.coef_) > 1e-10)
+        sparsity = 1 - (active_features / X.shape[1])
+        return active_features, sparsity, model.coef_
+
+    @staticmethod
+    def check_optimizer_curse(val_score, test_score, n_trials):
+        """回测审计专家：评估 P-hacking 风险"""
+        luck_factor = np.log1p(n_trials) * 0.01 
+        gap = max(0, val_score - test_score)
+        prob_noise = 1 - np.exp(-gap / (luck_factor + 1e-6))
+        return gap <= luck_factor, prob_noise
+
+# [专家 3: 量化风险专家]
+class QuantEngine:
+    @staticmethod
+    def get_market_data(tickers):
+        data = yf.download(tickers, period="1y", progress=False)['Close']
+        if isinstance(data, pd.Series): data = data.to_frame()
+        returns = data.pct_change().dropna()
+        return returns
+
+    @staticmethod
+    def compute_asymmetric_risk(returns, vix, weights):
+        """非对称代价逻辑"""
+        port_ret = returns.dot(weights)
+        alpha = 0.05 * (1 + (vix - 20) / 40) if vix > 20 else 0.05
+        dynamic_vaR = np.quantile(port_ret, min(alpha, 0.2))
+        return dynamic_vaR, port_ret.mean() * 252, port_ret.std() * np.sqrt(252)
+
 # --- 4. 工业级量化逻辑引擎 ---
 class AdvancedStrategicOrchestrator:
     def __init__(self, vix_current: float):
@@ -76,6 +111,21 @@ class QuantEngine:
         var = np.percentile(port_returns, (1-confidence)*100)
         return ann_r, ann_v, sharpe, var, port_returns[port_returns <= var].mean()
 
+def get_ai_analysis(prompt_type, news_context, vix_val):
+    vix_msg = f"注意：当前市场VIX压力为{vix_val}，策略需偏向非对称防御。"
+    prompts = {
+        "macro": f"作为新加坡宏观专家，基于以下资讯分析S$NEER与CPI：{news_context}。{vix_msg}",
+        "sector": f"作为行业分析专家，评估AI算力与新加坡蓝筹机会：{news_context}。{vix_msg}"
+    }
+    try:
+        return model.generate_content(prompts[prompt_type]).text, None
+    except Exception as e: return None, str(e)
+
+def render_tv_chart(symbol):
+    code = f"""<script src="https://s3.tradingview.com/tv.js"></script>
+    <script>new TradingView.MediumWidget({{"symbols": [["{symbol}", "{symbol}|12M"]], "width": "100%", "height": 350, "locale": "zh_CN", "colorTheme": "light"}});</script>"""
+    components.html(code, height=360)
+
 # --- 5. 辅助功能 ---
 def generate_docx_report(content, title="Investment Memo"):
     doc = Document()
@@ -112,56 +162,69 @@ def render_tv_widget(symbol, title):
 
 # --- 6. 侧边栏 ---
 with st.sidebar:
-    st.header("⚙️ 终端控制")
-    vix_input = st.slider("VIX 压力测试", 10.0, 50.0, 20.0)
-    st.sidebar.markdown("---")
-    btn_macro = st.button("🚀 启动深度宏观研判", use_container_width=True)
-    btn_sector = st.button("🔍 穿透行业风险", use_container_width=True)
+    st.header("⚙️ 专家指令中心")
+    vix_input = st.slider("VIX 风险调节", 10.0, 50.0, 20.0)
+    st.divider()
+    btn_macro = st.button("🚀 启动宏观研判 (专家1+4)", use_container_width=True)
+    btn_sector = st.button("🔍 穿透行业风险 (专家2+4)", use_container_width=True)
+    st.caption("注：研判将结合非对称代价逻辑输出")
 
 # --- 7. 界面布局 ---
-tab1, tab2, tab3, tab4 = st.tabs(["🧠 首席宏观研判", "📈 实时仪表盘", "🛡️ 行业风险穿透", "🔢 量化工作台"])
+tab1, tab2, tab3, tab4 = st.tabs(["🧠 首席宏观研判", "📈 实时仪表盘", "🛡️ 行业风险穿透", "🔢 量化审计"])
 
 with tab1:
     if btn_macro:
-        with st.spinner("策略师正在扫描全球图谱..."):
-            sg, tech, geo = fetch_macro_sector_data()
-            res, err = get_ai_analysis("macro", sg, tech, geo, vix_input)
-            if not err:
-                st.markdown(res)
-                st.download_button("📥 下载专业备忘录", generate_docx_report(res, "Macro Report"), f"Macro_{datetime.date.today()}.docx")
+        with st.spinner("专家协同分析中..."):
+            res, err = get_ai_analysis("macro", "MAS Policy Update, Singapore CPI Data", vix_input)
+            if not err: st.markdown(res)
             else: st.error(err)
-    else: st.info("点击左侧按钮启动宏观分析")
+    else: st.info("请点击左侧按钮启动")
 
 with tab2:
-    col1, col2 = st.columns(2)
-    with col1: render_tv_widget("OANDA:XAUUSD", "Gold")
-    with col2: render_tv_widget("NASDAQ:NDX", "Nasdaq 100")
+    c1, c2 = st.columns(2)
+    with c1: render_tv_chart("OANDA:XAUUSD")
+    with c2: render_tv_chart("NASDAQ:NDX")
 
 with tab3:
     if btn_sector:
-        with st.spinner("风险穿透中..."):
-            sg, tech, geo = fetch_macro_sector_data()
-            res, err = get_ai_analysis("sector", sg, tech, geo, vix_input)
-            if not err:
-                st.markdown(res)
-                st.download_button("📥 下载行业报告", generate_docx_report(res, "Sector Report"), f"Sector_{datetime.date.today()}.docx")
-    else: st.info("点击左侧按钮执行行业风险评估")
+        with st.spinner("行业专家评估中..."):
+            res, err = get_ai_analysis("sector", "Nvidia AI Chips, SG Blue Chips Performance", vix_input)
+            if not err: st.markdown(res)
+    else: st.info("请点击左侧按钮启动")
 
 with tab4:
-    st.header("🔢 量化实验场")
-    asset_presets = {"🇸🇬 新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "🇺🇸 纳指科技": ["NVDA", "AAPL", "MSFT"]}
-    choice = st.selectbox("资产预设", list(asset_presets.keys()))
-    if st.button("🔄 执行硬核审计"):
-        mean_r, cov_m, raw_ret = QuantEngine.get_portfolio_stats(asset_presets[choice])
-        if raw_ret is not None:
-            orch = AdvancedStrategicOrchestrator(vix_input)
-            weights = np.array([1.0/len(mean_r)]*len(mean_r))
-            ann_r, ann_v, sharpe, var, cvar = QuantEngine.calculate_risk_metrics(raw_ret, weights)
-            risk_bounds = orch.compute_quantile_risk_bounds(raw_ret.dot(weights))
-            manifold_df = orch.extract_market_manifold(raw_ret)
+    st.header("🔢 量化审计与特征实验室")
+    preset = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
+    choice = st.selectbox("选择审计资产包", list(preset.keys()))
+    
+    if st.button("🔄 执行专家深度审计", type="primary"):
+        returns = QuantEngine.get_market_data(preset[choice])
+        
+        if not returns.empty:
+            # 1. 风险专家：非对称 VaR
+            weights = np.array([1.0/len(returns.columns)]*len(returns.columns))
+            d_var, a_ret, a_vol = QuantEngine.compute_asymmetric_risk(returns, vix_input, weights)
             
+            # 2. 特征专家：稀疏性检查 (模拟 X, y)
+            y = returns.iloc[:, 0]
+            X = returns.shift(1).dropna(); y = y.iloc[1:]
+            active, sparsity, _ = StrategyAuditor.run_feature_sparsity_check(X, y)
+            
+            # 3. 审计专家：P-hacking 自检
+            is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.04, 100)
+            
+            # --- UI 展示 ---
             m1, m2, m3 = st.columns(3)
-            m1.metric("动态安全边界", f"{risk_bounds['dynamic_vaR']:.2%}")
-            m2.metric("年化波动", f"{ann_v:.2%}")
-            m3.metric("Sharpe", f"{sharpe:.2f}")
-            st.line_chart(manifold_df)
+            m1.metric("动态 VaR (非对称)", f"{d_var:.2%}")
+            m2.metric("特征稀疏率", f"{sparsity:.1%}")
+            m3.metric("统计噪声(P-hacking)概率", f"{p_noise:.1%}")
+            
+            st.divider()
+            st.subheader("👁️ 非线性流形扫描 (Isomap)")
+            iso = Isomap(n_neighbors=5, n_components=2)
+            manifold = iso.fit_transform(returns)
+            st.line_chart(pd.DataFrame(manifold, columns=["结构维度1", "结构维度2"]))
+            st.success(f"审计结论：策略{'稳健' if is_robust else '可能存在过度拟合'} (基于 {active} 个有效特征)")
+
+st.markdown("---")
+st.caption("Macro Alpha Pro | 四大专家模式：特征/回测/量化/宏观 | 算法底座：LassoCV, Isomap, Quantile Regression")

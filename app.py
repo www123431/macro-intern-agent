@@ -120,8 +120,6 @@ def get_ai_analysis(prompt_type, vix_val):
 
 # --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---
 
-# --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---
-
 class AgentState(TypedDict):
     target_assets: str
     vix_level: float
@@ -143,24 +141,26 @@ def research_node(state: AgentState):
     X = returns.shift(1).fillna(0)
     active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
     is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
-
-    p_noise = p_noise # P-hacking 风险
-    sparsity = sparsity # 特征稀疏度
     
-    # 核心计算逻辑：100分为满分
-    # 1. P-hacking 惩罚：风险超过 10% 开始大幅扣分
-    # 2. 稀疏性惩罚：如果特征被删到只剩不到 2 个，说明模型在强行拟合
+    # --- 核心计算逻辑：审计置信度 ---
     base_score = 100
     penalty_p = max(0, (p_noise - 0.05) * 200) # 超过5%后，每增加1%扣2分
     penalty_s = 20 if active < 2 else 0
-    
     confidence_score = max(0, min(100, base_score - penalty_p - penalty_s))
     
+    # ⚠️ 关键修正：必须将 confidence_score 包含在返回的字典中
     return {
         "quant_results": {
-            "d_var": d_var, "p_noise": p_noise, "sparsity": sparsity, 
-            "active": active, "coefs": coefs, "returns": returns, 
-            "X": X, "a_ret": a_ret, "a_vol": a_vol
+            "d_var": d_var, 
+            "p_noise": p_noise, 
+            "sparsity": sparsity, 
+            "active": active, 
+            "coefs": coefs, 
+            "returns": returns, 
+            "X": X, 
+            "a_ret": a_ret, 
+            "a_vol": a_vol,
+            "confidence_score": confidence_score # 👈 确保这个键存在
         }, 
         "is_robust": (p_noise < 0.3)
     }

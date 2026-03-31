@@ -504,20 +504,7 @@ with st.sidebar:
     st.caption("数据源: CBOE Real-time / Yahoo Finance")
 
     # --- 找到侧边栏“🤖 开启全行业自动扫描”部分 ---
-# --- 侧边栏修改 ---
-if st.sidebar.button("🤖 开启全行业自动扫描", type="primary", use_container_width=True):
-    with st.status("正在扫描全球市场板块...", expanded=True) as status:
-        scanner = MarketScanner()
-        top_asset = scanner.run_daily_scan() # 假设这里返回详细信息
-        
-        # 存储到 session_state
-        st.session_state.scan_results = top_asset 
-        st.session_state.target_assets = top_asset['name']
-        
-        status.update(label="扫描完成，建议已生成！", state="complete")
-    if "ai_scan_analysis" in st.session_state:
-        del st.session_state.ai_scan_analysis # 清除旧理由，强制 AI 为新资产生成新理由
-    st.rerun()
+
 
 # 增加一个标签页
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -729,7 +716,21 @@ with tab5:
 
     # 情况 A: 还没有数据
     if not res:
-        st.info("💡 请点击侧边栏的 **[开启全行业自动扫描]** 按钮，获取实时投资机会。")
+        st.write("### 🔍 尚未开启扫描")
+        # --- 侧边栏修改 ---
+        if st.button("🤖 开启全行业自动扫描", type="primary", use_container_width=True):
+            with st.status("正在扫描全球市场板块...", expanded=True) as status:
+                scanner = MarketScanner()
+                top_asset = scanner.run_daily_scan() # 假设这里返回详细信息
+                
+                # 存储到 session_state
+                st.session_state.scan_results = top_asset 
+                st.session_state.target_assets = top_asset['name']
+                
+                status.update(label="扫描完成，建议已生成！", state="complete")
+            if "ai_scan_analysis" in st.session_state:
+                del st.session_state.ai_scan_analysis # 清除旧理由，强制 AI 为新资产生成新理由
+            st.rerun()
     
     # 情况 B: 已经有数据，开始渲染界面
     else:

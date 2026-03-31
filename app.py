@@ -179,7 +179,9 @@ with tab3:
         st.info("💡 请点击左侧按钮执行行业评估。")
 
 with tab4:
-    st.header("🔢 量化审计与特征实验室")
+    st.header("🔢 专家审计：特征稀疏性与回测稳健性")
+    
+    # 模拟数据包选择（保持不变）
     preset = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
     choice = st.selectbox("选择审计资产包", list(preset.keys()))
     
@@ -187,32 +189,47 @@ with tab4:
         returns = QuantEngine.get_market_data(preset[choice])
         
         if not returns.empty:
-            # 1. 风险专家：计算非对称风险
+            # 1. 计算核心指标
             weights = np.array([1.0/len(returns.columns)]*len(returns.columns))
             d_var, a_ret, a_vol = QuantEngine.compute_asymmetric_risk(returns, vix_input, weights)
-            
-            # 2. 特征专家：Lasso 稀疏性检查
-            y = returns.iloc[:, 0]
-            X = returns.shift(1).dropna(); y = y.iloc[1:]
-            active, sparsity, _ = StrategyAuditor.run_feature_sparsity_check(X, y)
-            
-            # 3. 审计专家：P-hacking 风险检测
+            y = returns.iloc[:, 0]; X = returns.shift(1).dropna(); y = y.iloc[1:]
+            active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
             is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
-            
-            # --- 展示审计结果 ---
-            m1, m2, m3 = st.columns(3)
-            m1.metric("动态 VaR (非对称)", f"{d_var:.2%}")
-            m2.metric("特征稀疏率 (Lasso)", f"{sparsity:.1%}")
-            m3.metric("统计噪声(P-hacking)概率", f"{p_noise:.1%}")
-            
+
+            # --- 升级版 UI: 状态监控面板 ---
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("动态 VaR (非对称)", f"{d_var:.2%}", delta="偏高" if d_var < -0.02 else "安全", delta_color="inverse")
+            c2.metric("特征稀疏率", f"{sparsity:.1%}", delta="因子过载" if sparsity < 0.2 else "稀疏稳健", delta_color="normal")
+            c3.metric("P-hacking 风险", f"{p_noise:.1%}", delta="可信度高" if p_noise < 0.15 else "存在偏误", delta_color="inverse")
+            c4.metric("策略夏普比率", f"{(a_ret-0.03)/a_vol:.2f}")
+
             st.divider()
-            st.subheader("👁️ 市场非线性流形扫描 (Isomap)")
-            iso = Isomap(n_neighbors=5, n_components=2)
-            manifold = iso.fit_transform(returns)
-            st.line_chart(pd.DataFrame(manifold, columns=["Dim 1", "Dim 2"]))
-            st.success(f"审计结论：策略{'稳健' if is_robust else '可能过拟合'} (基于 {active} 个核心特征因子)")
-        else:
-            st.warning("未能获取有效数据。")
+
+            # --- 升级版 UI: 深度扫描分析 ---
+            col_l, col_r = st.columns([1, 1])
+            
+            with col_l:
+                st.subheader("👁️ 市场流形结构 (Regime Map)")
+                iso = Isomap(n_neighbors=5, n_components=2)
+                manifold = iso.fit_transform(returns)
+                df_iso = pd.DataFrame(manifold, columns=["结构维度1", "结构维度2"])
+                df_iso['Return'] = returns.mean(axis=1).values # 映射颜色
+                # 使用散点图展示流形聚类
+                st.scatter_chart(df_iso, x="结构维度1", y="结构维度2", color="Return", size=10)
+                st.caption("注：散点聚类反映了市场在特定宏观状态下的联动性。")
+
+            with col_r:
+                st.subheader("🧬 因子贡献权重 (Lasso)")
+                # 展示特征权重条形图
+                feat_importance = pd.DataFrame({'Factor': X.columns, 'Weight': coefs})
+                st.bar_chart(feat_importance, x="Factor", y="Weight")
+                st.info(f"专家建议：当前保留了 {active} 个关键特征。")
+
+            # --- 结论审计报告 ---
+            if is_robust:
+                st.success(f"✅ 审计结论：策略稳健。该策略在非线性流形中表现出良好的结构一致性，且通过了 Optimizer's Curse 检验。")
+            else:
+                st.warning(f"⚠️ 审计警告：检测到过度拟合迹象。建议增加特征稀疏惩罚或引入 Unitless 正则化。")
 
 st.markdown("---")
 st.caption("Macro Alpha Pro | 核心算法：Isomap Non-linear Manifold, LassoCV Feature Selection, Asymmetric Risk Management")

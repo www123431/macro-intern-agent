@@ -232,12 +232,21 @@ def get_ai_analysis(prompt_type, vix_val):
 # --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---
 
 class AgentState(TypedDict):
+    # 1. 原始数据
     target_assets: str
     vix_level: float
+    
+    # 2. 跨板块情报 (新增：让 Tab 1/3 的成果流入)
+    macro_context: str    # 来自 Tab 1 的宏观定调
+    sector_risks: str     # 来自 Tab 3 的行业扫描
+    
+    # 3. 审计过程记录
     quant_results: dict
+    red_team_critique: str # 红队的专属挑战意见
+    
+    # 4. 最终产出
     is_robust: bool
-    technical_report: str  # 新增：存储硬核技术审计
-    audit_memo: str       # 存储最终的 CEO 级简报
+    final_memo: str       # 综合了所有 Tab 信息的 CEO 级简报
 
 PRESET_ASSETS = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
 

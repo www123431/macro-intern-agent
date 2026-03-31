@@ -19,6 +19,7 @@ from typing import TypedDict, Annotated, List
 import operator
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated
+from engine.scanner import MarketScanner
 
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")

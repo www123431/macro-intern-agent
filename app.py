@@ -21,6 +21,40 @@ from langgraph.graph import StateGraph, END
 
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")
+
+st.markdown("""
+    <style>
+    /* 调整 Metric 卡片的背景 */
+    [data-testid="stMetricValue"] {
+        font-size: 28px;
+        color: #1E3A8A;
+    }
+    div[data-testid="metric-container"] {
+        background-color: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    /* 优化按钮样式 */
+    .stButton>button {
+        width: 100%;
+        border-radius: 5px;
+        height: 3em;
+        background-color: #1E3A8A;
+    }
+    /* 审计报告的卡片式布局 */
+    .audit-card {
+        background-color: #FFFFFF;
+        border-left: 5px solid #1E3A8A;
+        padding: 20px;
+        margin: 10px 0;
+        border-radius: 5px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 st.title("🏛️ Macro Alpha: 四大专家协同研判终端")
 
 # --- 2. 安全读取 Secrets ---
@@ -234,45 +268,82 @@ builder.add_edge("translator", END)
 
 agent_executor = builder.compile()
 
-# --- 7. 主界面布局 ---
+# --- 7. 主界面布局与样式注入 ---
+
+# 注入自定义 CSS 以提升 UI 质感
+st.markdown("""
+    <style>
+    /* 全局背景与字体微调 */
+    .main { background-color: #FDFDFD; }
+    
+    /* Metric 卡片美化 */
+    div[data-testid="metric-container"] {
+        background-color: #FFFFFF;
+        border: 1px solid #ECEFF4;
+        padding: 1rem;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    [data-testid="stMetricValue"] { font-size: 24px; color: #1B315E; font-weight: 700; }
+    [data-testid="stMetricLabel"] { font-size: 14px; color: #64748B; }
+
+    /* 决策建议卡片 */
+    .decision-card {
+        background-color: #F8FAFC;
+        border-left: 5px solid #1B315E;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 15px 0;
+    }
+    
+    /* 侧边栏优化 */
+    .css-1639116 { background-color: #1B315E; }
+    .stButton>button {
+        border-radius: 8px;
+        height: 3em;
+        transition: all 0.3s;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ 智能环境配置")
     
-    # 自动获取实时 VIX
     real_vix = QuantEngine.get_realtime_vix()
     
-    # 根据 VIX 数值自动定义风险等级
+    # 动态风险颜色与标签
     if real_vix < 15:
-        risk_level = "低波动 ( complacency )"
-        risk_color = "blue"
+        risk_label, risk_color = "低波动 (Complacency)", "blue"
     elif real_vix < 25:
-        risk_level = "常态波动 ( Normal )"
-        risk_color = "green"
+        risk_label, risk_color = "常态波动 (Normal)", "green"
     elif real_vix < 35:
-        risk_level = "高波动 ( Panic )"
-        risk_color = "orange"
+        risk_label, risk_color = "高波动 (Panic)", "orange"
     else:
-        risk_level = "极高风险 ( Crisis )"
-        risk_color = "red"
+        risk_label, risk_color = "极高风险 (Crisis)", "red"
 
-    st.metric("实时 VIX 指数", real_vix, delta=f"{risk_level}", delta_color="normal")
+    st.metric("实时 VIX 指数", real_vix, delta=risk_label, delta_color="normal")
     
-    # 依然保留一个手动微调（可选），但默认值设为实时值
-    vix_input = st.number_input("环境压力修正 (默认为实时)", value=real_vix)
+    vix_input = st.number_input("环境压力修正 (默认为实时)", value=real_vix, help="手动调整波动率倍率以进行压力测试")
     
     st.divider()
-    st.caption("数据源: CBOE Real-time Index")
+    st.info("💡 **系统状态**: 当前处于【首席审计模式】，Agent 将优先检查统计稳健性。")
+    st.caption("数据源: CBOE Real-time / Yahoo Finance")
 
+# 使用分栏美化 Tab 标题
 tab1, tab2, tab3, tab4 = st.tabs(["🧠 首席宏观研判", "📈 实时仪表盘", "🛡️ 行业风险穿透", "🔢 量化审计室"])
 
 with tab1:
     st.header("🧠 首席宏观投研备忘录")
-    if st.button("🚀 启动宏观协同分析", type="primary"):
-        with st.spinner("正在调度新加坡宏观专家库..."):
-            macro_res = get_ai_analysis("macro", vix_input)
-            st.markdown(macro_res)
-            st.download_button("📥 下载宏观报告", generate_docx_report(macro_res, "Macro Memo"), "Macro_Report.docx")
+    with st.container():
+        col_m1, col_m2 = st.columns([2, 1])
+        with col_m1:
+            if st.button("🚀 启动宏观协同分析", type="primary", use_container_width=True):
+                with st.spinner("正在调度新加坡宏观专家库..."):
+                    macro_res = get_ai_analysis("macro", vix_input)
+                    st.markdown(f'<div class="decision-card">{macro_res}</div>', unsafe_allow_html=True)
+                    st.download_button("📥 下载宏观报告", generate_docx_report(macro_res, "Macro Memo"), "Macro_Report.docx")
+        with col_m2:
+            st.caption("专家组成员：\n- MAS 政策分析师\n- 离岸汇率策略师\n- 通胀研究专家")
 
 with tab2:
     st.subheader("📊 全球资产实时走廊")
@@ -288,92 +359,85 @@ with tab3:
     if st.button("🔍 执行行业风险扫描", type="primary"):
         with st.spinner("正在分析行业暴露风险..."):
             sector_res = get_ai_analysis("sector", vix_input)
-            st.markdown(sector_res)
+            st.markdown(f'<div class="decision-card">{sector_res}</div>', unsafe_allow_html=True)
             st.download_button("📥 下载行业报告", generate_docx_report(sector_res, "Sector Drilldown"), "Sector_Report.docx")
 
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
-    choice = st.selectbox("选择审计资产包", list(PRESET_ASSETS.keys()))
     
-    # 初始化 session_state 用于持久化展示结果
+    # 顶部交互区
+    c_left, c_right = st.columns([3, 1])
+    with c_left:
+        choice = st.selectbox("选择审计资产包", list(PRESET_ASSETS.keys()), label_visibility="collapsed")
+    with c_right:
+        start_audit = st.button("🚀 启动全自动审计流", type="primary", use_container_width=True)
+
     if "final_audit_state" not in st.session_state:
         st.session_state.final_audit_state = None
 
-    if st.button("🚀 启动全自动审计工作流", type="primary"):
+    if start_audit:
         with st.status("Agent 正在协同专家组...", expanded=True) as status:
-            state = {"target_assets": choice, "vix_level": vix_input, "quant_results": {}, "is_robust": True, "audit_memo": ""}
+            state = {"target_assets": choice, "vix_level": vix_input, "quant_results": {}, "is_robust": True, "technical_report": "", "audit_memo": ""}
             for event in agent_executor.stream(state):
                 for node, update in event.items():
                     st.write(f"✅ {node} 任务处理完成")
                     state.update(update)
-            # 将运行结果存入 session_state
             st.session_state.final_audit_state = state
             status.update(label="审计流执行完毕", state="complete")
 
-    # 渲染结果区域
+    # 结果渲染区
     if st.session_state.final_audit_state:
         s = st.session_state.final_audit_state
-        
         if s.get("quant_results"):
             q = s['quant_results']
-            score = q['confidence_score']
+            score = q.get('confidence_score', 0)
             
-            # 定义颜色和评级
-            if score >= 80:
-                color = "green"
-                rating = "💎 高度可信 (High Integrity)"
-            elif score >= 50:
-                color = "orange"
-                rating = "⚠️ 中度参考 (Cautionary)"
-            else:
-                color = "red"
-                rating = "🚨 统计噪音警报 (Low Integrity)"
-    
-            # 使用大号字体展示
+            # --- 第一层：置信度仪表盘 ---
             st.divider()
-            col_left, col_right = st.columns([1, 3])
-            with col_left:
+            score_col, status_col = st.columns([1, 2])
+            with score_col:
                 st.metric("审计置信度", f"{int(score)}/100")
-            with col_right:
-                st.subheader(f"审计状态：:{color}[{rating}]")
-                if score < 60:
-                    st.warning("提示：由于 P-hacking 风险偏高或有效特征过少，AI 建议仅将此报告作为压力场景下的极端参考，而非主导决策依据。")
+            with status_col:
+                res_color = "green" if score >= 80 else "orange" if score >= 50 else "red"
+                res_label = "💎 高度可信 (High Integrity)" if score >= 80 else "⚠️ 中度参考 (Cautionary)" if score >= 50 else "🚨 统计噪音警报 (Low)"
+                st.markdown(f"<h2 style='color:{res_color}; margin-top:0;'>{res_label}</h2>", unsafe_allow_html=True)
             
-            # --- 第一层：结论先行 (Executive Summary) ---
+            if score < 60:
+                st.warning("⚠️ **风控提示**: 当前样本量或特征稀疏度触发预警，模型可能处于‘过拟合’边缘。")
+
+            # --- 第二层：决策建议 (Executive Summary) ---
             if s.get("audit_memo") and s['is_robust']:
                 memo_parts = s["audit_memo"].split("###")
-                
-                # 提取 AI 生成的摘要部分 (假设 prompt 已更新为分层格式)
                 st.subheader("💡 首席执行决策建议")
-                if len(memo_parts) > 1:
-                    st.info(memo_parts[1]) # 显示摘要
-                else:
-                    st.markdown(s["audit_memo"])
+                # 尝试渲染美化后的摘要
+                exec_txt = memo_parts[1] if len(memo_parts) > 1 else s["audit_memo"]
+                st.info(exec_txt)
                 
-                # --- 第二层：关键指标白话化 ---
+                # --- 第三层：核心指标横向对比 ---
                 st.subheader("🔍 关键洞察 (Key Insights)")
-                c1, c2, c3, c4 = st.columns(4)
-                # 将术语翻译为业务语言
-                c1.metric("压力下安全边际", f"{q['d_var']:.2%}", help="即 VaR，衡量极端情况下的潜在回撤")
-                c2.metric("模型决策清晰度", f"{q['sparsity']:.1%}", help="即特征稀疏率，衡量模型是否被噪音干扰")
-                c3.metric("表现真实信度", f"{q['p_noise']:.1%}", help="即 P-hacking 风险，衡量历史表现是否仅凭运气")
-                c4.metric("风险收益比", f"{(q['a_ret']-0.03)/q['a_vol']:.2f}", help="即夏普比率")
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("压力回撤 (VaR)", f"{q['d_var']:.2%}", help="95%置信度下的潜在损失")
+                k2.metric("信号纯净度", f"{q['sparsity']:.1%}", help="有效因子占比")
+                k3.metric("统计真实信度", f"{q['p_noise']:.1%}", help="排除P-hacking后的真实性")
+                k4.metric("夏普比率(预估)", f"{(q['a_ret']-0.03)/q['a_vol']:.2f}")
 
-                # --- 第三层：技术附录 (Technical Appendix) ---
+                # --- 第四层：技术底层透明化 ---
                 with st.expander("🔬 查看量化审计技术细节 (Quant Tech Stack)"):
-                    st.subheader("🧬 因子贡献权重")
-                    st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")
+                    g1, g2 = st.columns([2, 1])
+                    with g1:
+                        st.markdown("**🧬 因子贡献权重 (Lasso Coefficients)**")
+                        chart_data = pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']})
+                        st.bar_chart(chart_data, x="Factor", y="Weight")
+                    with g2:
+                        st.markdown("**📝 原始审计意见**")
+                        st.caption(s.get("technical_report", "技术审计未生成"))
                     
-                    if len(memo_parts) > 2:
-                        st.markdown("###" + memo_parts[2]) # 关键洞察细节
-                    if len(memo_parts) > 3:
-                        st.markdown("###" + memo_parts[3]) # 技术细节
-                    
-                    st.download_button("📥 下载完整审计备忘录", 
+                    st.download_button("📥 下载正式审计备忘录 (.docx)", 
                                      generate_docx_report(s["audit_memo"], "Investment Audit Memo"), 
-                                     "Audit_Report.docx")
+                                     "Audit_Report.docx", use_container_width=True)
             else:
-                st.error("⚠️ 策略统计风险过高，Agent 已拦截 AI 报告生成。")
-                st.warning(f"当前 P-hacking 风险值: {q['p_noise']:.2%} (阈值: 30%)")
+                st.error("⚠️ **审计拦截**: 由于统计稳健性未通过（P-hacking风险过高），系统已自动终止决策建议生成。")
+                st.markdown(f"**当前风险值**: `{q['p_noise']:.2%}` | **允许上限**: `30.00%`")
+
 st.markdown("---")
-st.caption("Macro Alpha Pro | NUS MSBA Project | Powered by LangGraph")
+st.caption("Macro Alpha Pro | NUS MSBA Project | 专注量化审计与合规决策")

@@ -557,35 +557,33 @@ with tab3:
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     
-        # 1. 核心逻辑：监听来自 Tab 5 的“传纸条”信号
-        # 如果检测到 auto_trigger，说明用户刚从 Tab 5 过来
-        if st.session_state.get("auto_trigger"):
-            # 将扫描到的资产设为当前目标
-            st.session_state["audit_target_sync"] = st.session_state.get("target_assets")
-            # ⚠️ 重要：清除触发标记，否则你会发现下拉框被“锁死”在扫描结果上改不动
-            st.session_state.auto_trigger = False 
-    
-        current_assets = list(PRESET_ASSETS.keys())
-        
-        # 2. 确定下拉框应该默认显示哪一个
-        # 优先级：Tab 5 传过来的值 > 之前选过的值 > 列表第一个
-        sync_asset = st.session_state.get("audit_target_sync")
-        if sync_asset in current_assets:
-            default_index = current_assets.index(sync_asset)
-        else:
-            default_index = 0
-    
-        # 3. 渲染下拉框
-        # 注意：我们这里不直接在 selectbox 里写 key="target_assets"，防止冲突
-        choice = st.selectbox(
-            "选择审计目标", 
-            current_assets, 
-            index=default_index,
-            key="manual_audit_selector" # 换一个干净的 key
-        )
-        
-        start_audit = st.button("🚀 启动深度审计", type="primary", use_container_width=True)
+    # 1. 核心逻辑：监听来自 Tab 5 的“传纸条”信号
+    if st.session_state.get("auto_trigger"):
+        # 将扫描到的资产设为当前目标
+        st.session_state["audit_target_sync"] = st.session_state.get("target_assets")
+        # ⚠️ 重要：清除触发标记，防止下拉框被锁定
+        st.session_state.auto_trigger = False  
 
+    current_assets = list(PRESET_ASSETS.keys())
+    
+    # 2. 确定下拉框默认值
+    sync_asset = st.session_state.get("audit_target_sync")
+    if sync_asset in current_assets:
+        default_index = current_assets.index(sync_asset)
+    else:
+        default_index = 0
+
+    # 3. 渲染 UI
+    choice = st.selectbox(
+        "选择审计目标", 
+        current_assets, 
+        index=default_index,
+        key="manual_audit_selector"
+    )
+    
+    # 确保这一行和 selectbox 垂直对齐
+    start_audit = st.button("🚀 启动深度审计", type="primary", use_container_width=True)
+    
     # --- 4. 触发与执行 ---
     if start_audit:
     # 如果此时 session 中残留了自动触发标记，顺便清理掉，保持状态干净

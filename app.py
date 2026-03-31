@@ -22,6 +22,52 @@ from langgraph.graph import StateGraph, END
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")
 
+# --- 1.5 登录验证逻辑 (新增) ---
+def check_password():
+    """验证用户名和密码，返回 True/False"""
+    def password_entered():
+        if st.session_state["username"] == "zhang" and st.session_state["password"] == "200211":
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # 验证后删除密码，安全性更佳
+            del st.session_state["username"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # 初次访问，显示登录界面
+        st.markdown("""
+            <style>
+            .login-box {
+                max-width: 400px;
+                margin: 100px auto;
+                padding: 30px;
+                background-color: #FFFFFF;
+                border-radius: 15px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+                border: 1px solid #E2E8F0;
+                text-align: center;
+            }
+            </style>
+            <div class="login-box">
+                <h2 style='color: #1B315E;'>🏛️ Macro Alpha Pro</h2>
+                <p style='color: #64748B;'>请验证您的身份以访问终端</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.text_input("用户名", key="username")
+            st.text_input("密码", type="password", key="password", on_change=password_entered)
+            st.button("登录终端", on_click=password_entered)
+            if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+                st.error("❌ 凭据无效，请联系管理员")
+        return False
+    return True
+
+# 只有通过验证才继续向下运行
+if not check_password():
+    st.stop()  # 拦截后续所有代码运行
+
 st.markdown("""
     <style>
     /* 调整 Metric 卡片的背景 */

@@ -342,9 +342,9 @@ def generate_ai_reasons(asset_name, scan_data, ai_model): # <--- 增加 ai_model
     
     请根据这些数据，提供3条极其口语化、专业且具有煽动性的推荐理由。
     要求：
-    1. 像是在电梯里向老板汇报一样简洁。
-    2. 必须引用上述至少两个具体数据。
-    3. 每条理由带一个 Emoji，总字数控制在 150 字以内。
+    1. 风格：专业、简洁、具逻辑驱动的煽动性。使用“夏普比率”、“资金共振”、“盈亏比”等行内术语。严禁使用“老板/无敌”等非专业词汇。
+    2. 内容：必须引用夏普比率({res.get('sharpe'):.2f})和市场契合度({res.get('market_fit')}%)。
+    3. 格式：仅输出3条理由，每条带一个Emoji，总字数严格控制在150字内。
     """
     try:
         response = ai_model.generate_content(prompt)

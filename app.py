@@ -407,7 +407,7 @@ with tab2:
 
     # 第三排：原油 vs 沪深300 (补回这两项)
     col5, col6 = st.columns(2)
-    with col5: render_tv_chart("NYMEX:CL1!", "WTI 原油期货")
+    with col5: render_tv_chart("TVC:UKOIL", "布伦特原油 (Brent)")
     with col6: render_tv_chart("SSE:000300", "沪深 300 指数")
 
 with tab3:

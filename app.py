@@ -18,6 +18,7 @@ from sklearn.linear_model import LassoCV
 from typing import TypedDict, Annotated, List
 import operator
 from langgraph.graph import StateGraph, END
+from typing import TypedDict, Annotated
 
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")
@@ -182,31 +183,55 @@ def generate_docx_report(content, title="Investment Memo"):
 
 def red_team_node(state: AgentState):
     """
-    红队对抗节点：模拟‘恶意审计师’，专门寻找模型崩塌的场景 
+    进化版红队节点：AI 驱动的逻辑证伪专家
     """
     q = state['quant_results']
     vix = state['vix_level']
-    critiques = []
+    macro_info = state.get('macro_context', "暂无宏观数据")
+    sector_info = state.get('sector_risks', "暂无行业数据")
     
-    # 1. 挑战因子稳健性：如果因子太少，可能存在严重过拟合风险 
-    if q['active'] <= 1:
-        critiques.append("🔴 **因子极度匮乏**: 模型当前仅依赖单一信号，在政经环境突变时极易失效。")
-    
-    # 2. 挑战 P-hacking 风险：衡量结果是否纯属“运气” 
-    if q['p_noise'] > 0.20:
-        critiques.append(f"🔴 **统计噪音过载**: 当前策略有 {q['p_noise']:.1%} 的概率纯属‘运气’，建议拒绝执行。")
-    
-    # 3. 挑战 VIX 适应性：检查是否低估了‘肥尾’风险 
-    if vix < 15 and q['d_var'] < 0.02:
-        critiques.append("🟡 **低波动陷阱**: 当前 VIX 极低，模型可能低估了尾部极端情况的风险。")
+    # 1. 基础数学审计 (硬性指标)
+    math_critiques = []
+    if q['p_noise'] > 0.25:
+        math_critiques.append(f"🔴 统计噪音过高 ({q['p_noise']:.1%})，结果可能具有随机性。")
+    if q['active'] < 2:
+        math_critiques.append("🔴 特征过于稀疏，模型存在严重的欠拟合风险。")
 
-    # 汇总批评意见
-    red_team_output = "\n".join(critiques) if critiques else "🟢 红队未发现明显统计性漏洞。"
+    # 2. AI 逻辑审计 (定性与定量联动)
+    # 构建发给 AI 的审计指令
+    audit_prompt = f"""
+    你是一名资深量化风险审计师。请对比以下【量化指标】与【外部环境】，寻找逻辑矛盾。
     
-    # 更新技术报告，并将 P-hacking 风险超过 25% 的策略标记为不稳健 
+    【资产包】: {state['target_assets']}
+    【当前 VIX】: {vix}
+    【量化 VaR】: {q['d_var']:.2%}
+    【宏观背景 (来自 Tab 1)】: {macro_info}
+    【行业风险 (来自 Tab 3)】: {sector_info}
+    
+    任务：
+    1. 如果宏观显示有大风险（如加息、地缘政治），但量化 VaR 却很低，请指出“模型滞后性”风险。
+    2. 检查资产特性与环境的错配（例如：通胀环境下持有高杠杆资产）。
+    3. 给出 1-2 句犀利的“证伪”意见。要求：专业、批判性、拒绝客套。
+    """
+    
+    try:
+        response = model.generate_content(audit_prompt)
+        ai_critique = response.text
+    except:
+        ai_critique = "⚠️ AI 审计推理引擎暂时离线。"
+
+    # 汇总意见
+    full_critique = "【数学审计】\n" + ("\n".join(math_critiques) if math_critiques else "🟢 统计指标基础稳健。")
+    full_critique += f"\n\n【AI 逻辑证伪】\n{ai_critique}"
+
+    # 判定逻辑：如果数学审计有红灯，或者 AI 意见中包含严重警告，则拦截
+    is_robust = True
+    if math_critiques or "🚨" in ai_critique or "严重错配" in ai_critique:
+        is_robust = False if q['p_noise'] > 0.25 else True # 示例：仅在数学指标也差时彻底拦截
+
     return {
-        "technical_report": f"【红队对抗性审查】\n{red_team_output}",
-        "is_robust": q['p_noise'] < 0.25 
+        "technical_report": full_critique,
+        "is_robust": is_robust
     }
 
 def render_tv_chart(symbol, title):
@@ -232,22 +257,24 @@ def get_ai_analysis(prompt_type, vix_val):
 # --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---
 
 class AgentState(TypedDict):
-    # 1. 原始数据
-    target_assets: str
-    vix_level: float
+    # --- 1. 基础输入参数 ---
+    target_assets: str      # 目标资产组合名称
+    vix_level: float        # 当前市场 VIX 指数
     
-    # 2. 跨板块情报 (新增：让 Tab 1/3 的成果流入)
-    macro_context: str    # 来自 Tab 1 的宏观定调
-    sector_risks: str     # 来自 Tab 3 的行业扫描
+    # --- 2. 跨板块外部情报 (从 Tab 1 & Tab 3 注入) ---
+    macro_context: str      # 存储 Tab 1 的宏观定调（如：通胀预警、加息预期）
+    sector_risks: str       # 存储 Tab 3 的行业扫描（如：科技股回调风险、地缘政治）
     
-    # 3. 审计过程记录
-    quant_results: dict
-    red_team_critique: str # 红队的专属挑战意见
+    # --- 3. 核心计算与审计中间态 ---
+    # 注意：quant_results 只定义一次，存储所有数值计算结果
+    quant_results: dict     # 包含 d_var, p_noise, sparsity, coefs, a_ret 等
+    red_team_critique: str  # 存储红队节点的 AI 对抗性意见
+    technical_report: str   # 存储原始技术审计意见
     
-    # 4. 最终产出
-    is_robust: bool
-    final_memo: str       # 综合了所有 Tab 信息的 CEO 级简报
-
+    # --- 4. 最终输出结果 ---
+    is_robust: bool         # 策略稳健性判定（由红队和数学指标共同决定）
+    final_memo: str         # 综合宏观、行业、量化的 CEO 级最终审计简报
+    
 PRESET_ASSETS = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
 
 def research_node(state: AgentState):

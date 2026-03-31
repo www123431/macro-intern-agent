@@ -710,7 +710,7 @@ with tab4:
 with tab5:
     st.header("🤖 全球资产扫描建议")
     # 1. 常驻扫描按钮：放在顶部，方便随时触发
-    if st.button("🚀 开启全行业自动扫描", type="primary", use_container_width=True, key="scan_btn_tab5"):
+    if st.button("🚀 开启全行业自动扫描", type="primary", key="scan_btn_tab5"):
         with st.spinner("正在穿透全球资产数据进行因子对齐..."):
             # 这里调用你的扫描逻辑函数
             # res = scanner.run_daily_scan() 

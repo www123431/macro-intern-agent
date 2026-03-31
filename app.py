@@ -15,7 +15,9 @@ from scipy.stats import norm
 import yfinance as yf
 from sklearn.manifold import Isomap
 from sklearn.linear_model import LassoCV
-
+from typing import TypedDict, Annotated, List
+import operator
+from langgraph.graph import StateGraph, END
 
 # --- 1. 页面基本配置 ---
 st.set_page_config(page_title="Macro Alpha Pro Terminal", layout="wide", page_icon="🏛️")
@@ -125,6 +127,69 @@ def get_ai_audit_report(metrics_dict, choice_name, vix_val):
         return model.generate_content(prompt).text
     except:
         return "AI 审计插件暂时离线，请参考原始数值。"
+# --- 5.1 LangGraph 核心组件 ---
+
+class AgentState(TypedDict):
+    """Agent 的记忆：在节点间传递的文件夹"""
+    target_assets: str
+    vix_level: float
+    quant_results: dict
+    is_robust: bool
+    audit_memo: str
+
+def research_node(state: AgentState):
+    """节点 A：量化专家执行深度扫描"""
+    asset_tickers = preset[state['target_assets']]
+    returns = QuantEngine.get_market_data(asset_tickers)
+    
+    if returns.empty:
+        return {"is_robust": False}
+        
+    # 执行量化计算
+    weights = np.array([1.0/len(returns.columns)]*len(returns.columns))
+    d_var, a_ret, a_vol = QuantEngine.compute_asymmetric_risk(returns, state['vix_level'], weights)
+    y = returns.iloc[:, 0]; X = returns.shift(1).dropna(); y = y.iloc[1:]
+    active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
+    is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
+    
+    # 存入状态（包括计算出的 coefs 供后面画图用，这里简化存入结果）
+    return {
+        "quant_results": {
+            "d_var": d_var, "p_noise": p_noise, "sparsity": sparsity, 
+            "active": active, "coefs": coefs, "returns": returns, "X": X
+        },
+        "is_robust": is_robust and (p_noise < 0.2) # 如果风险太高则标记为不稳健
+    }
+
+# --- 5.2 编排工作流 ---
+
+# 1. 初始化
+builder = StateGraph(AgentState)
+
+# 2. 添加节点
+builder.add_node("researcher", research_node)
+builder.add_node("auditor", gemini_audit_node)
+
+# 3. 设置逻辑：起点 -> 专家 -> (判断) -> 审计/结束
+builder.set_entry_point("researcher")
+
+def router(state):
+    """路由逻辑：如果不稳健，直接结束，不浪费 AI Token"""
+    if state["is_robust"]:
+        return "auditor"
+    return END
+
+builder.add_conditional_edges("researcher", router)
+builder.add_edge("auditor", END)
+
+# 4. 编译 Agent
+agent_executor = builder.compile()
+
+def gemini_audit_node(state: AgentState):
+    """节点 B：AI 专家基于数据撰写报告"""
+    metrics = state['quant_results']
+    report = get_ai_audit_report(metrics, state['target_assets'], state['vix_level'])
+    return {"audit_memo": report}
 
 def render_tv_chart(symbol, title): # <--- 确保这里有两个参数
     """渲染 TradingView 交互微件"""
@@ -206,73 +271,66 @@ with tab3:
 with tab4:
     st.header("🔢 专家审计：特征稀疏性与回测稳健性")
     
-    # 1. 资产选择
     preset = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
     choice = st.selectbox("选择审计资产包", list(preset.keys()))
     
-    # 2. 只有一个统一的审计按钮
-    if st.button("🔄 启动 AI 深度审计终端", type="primary", key="unified_audit_btn"):
-        returns = QuantEngine.get_market_data(preset[choice])
+    if st.button("🚀 启动 Agentic AI 深度审计", type="primary", key="run_agent_v1"):
+        # 1. 自动感应实时 VIX (结合你之前的想法)
+        # 这里先用 vix_input，如果是自动驾驶模式则直接传入实时值
         
-        if not returns.empty:
-            # --- A. 量化计算 ---
-            weights = np.array([1.0/len(returns.columns)]*len(returns.columns))
-            d_var, a_ret, a_vol = QuantEngine.compute_asymmetric_risk(returns, vix_input, weights)
-            y = returns.iloc[:, 0]; X = returns.shift(1).dropna(); y = y.iloc[1:]
-            active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
-            is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
-
-            # --- B. UI 状态面板 ---
+        initial_input = {
+            "target_assets": choice,
+            "vix_level": vix_input,
+            "quant_results": {},
+            "is_robust": True,
+            "audit_memo": ""
+        }
+        
+        with st.status("Agent 正在协同专家组...", expanded=True) as status:
+            # 运行 Agent 流程
+            final_state = None
+            for event in agent_executor.stream(initial_input):
+                for node_name, state_update in event.items():
+                    st.write(f"✅ {node_name} 任务处理完成")
+                    # 更新当前状态以便获取结果
+                    if not final_state: final_state = initial_input.copy()
+                    final_state.update(state_update)
+            status.update(label="审计工作流执行完毕！", state="complete")
+        
+        # --- 2. 从 Agent 状态中提取结果并渲染 UI ---
+        if final_state and "quant_results" in final_state:
+            q = final_state['quant_results']
+            
+            # 复用你原来的 UI 组件展示计算结果
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("动态 VaR (非对称)", f"{d_var:.2%}", delta="偏高" if d_var < -0.02 else "安全", delta_color="inverse")
-            c2.metric("特征稀疏率", f"{sparsity:.1%}", delta="因子过载" if sparsity < 0.2 else "稀疏稳健", delta_color="normal")
-            c3.metric("P-hacking 风险", f"{p_noise:.1%}", delta="可信度高" if p_noise < 0.15 else "存在偏误", delta_color="inverse")
-            c4.metric("策略夏普比率", f"{(a_ret-0.03)/a_vol:.2f}")
+            c1.metric("动态 VaR", f"{q['d_var']:.2%}")
+            c2.metric("特征稀疏率", f"{q['sparsity']:.1%}")
+            c3.metric("P-hacking 风险", f"{q['p_noise']:.1%}")
+            c4.metric("有效特征", f"{q['active']} 个")
 
+            # 可视化部分（使用从状态中取回的数据）
             st.divider()
-
-            # --- C. 可视化布局 ---
-            col_l, col_r = st.columns([1, 1])
+            col_l, col_r = st.columns(2)
             with col_l:
                 st.subheader("👁️ 市场流形结构")
                 iso = Isomap(n_neighbors=5, n_components=2)
-                manifold = iso.fit_transform(returns)
+                manifold = iso.fit_transform(q['returns'])
                 df_iso = pd.DataFrame(manifold, columns=["Dim 1", "Dim 2"])
-                df_iso['Return'] = returns.mean(axis=1).values
-                st.scatter_chart(df_iso, x="Dim 1", y="Dim 2", color="Return", size=10)
+                df_iso['Return'] = q['returns'].mean(axis=1).values
+                st.scatter_chart(df_iso, x="Dim 1", y="Dim 2", color="Return")
 
             with col_r:
                 st.subheader("🧬 因子贡献权重")
-                feat_importance = pd.DataFrame({'Factor': X.columns, 'Weight': coefs})
+                feat_importance = pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']})
                 st.bar_chart(feat_importance, x="Factor", y="Weight")
 
-            st.divider()
-
-            # --- D. 重点：AI 自动化审计报告 (直接运行) ---
-            st.subheader("🤖 AI 专家深度审计报告")
-            with st.spinner("AI 审计师正在研读因子流形并撰写备忘录..."):
-                audit_metrics = {
-                    "d_var": d_var,
-                    "sparsity": sparsity,
-                    "p_noise": p_noise,
-                    "active": active
-                }
-                # 调用你之前定义的 get_ai_audit_report 函数
-                ai_report = get_ai_audit_report(audit_metrics, choice, vix_input)
-                
-                # 华丽的容器展示
-                st.info("💡 以下结论由 Gemini 1.5 Flash 审计专家基于量化数据自动生成：")
-                st.markdown(ai_report)
-                
-                # 提供导出功能
-                st.download_button(
-                    "📄 导出审计备忘录 (Docx)", 
-                    generate_docx_report(ai_report, f"Quantitative Audit - {choice}"), 
-                    f"Audit_{choice}_{datetime.date.today()}.docx",
-                    use_container_width=True
-                )
-        else:
-            st.error("无法获取市场数据，请检查网络或 Ticker 代码。")
-            
+            # --- 3. 展示 AI 审计备忘录 ---
+            if final_state['is_robust']:
+                st.divider()
+                st.subheader("🤖 AI 专家深度审计报告")
+                st.info("💡 结论由 Agent 编排 Gemini 生成：")
+                st.markdown(final_state['audit_memo'])
+            else:
+                st.warning("⚠️ Agent 审计终止：检测到该策略 P-hacking 风险过高，已拦截 AI 报告生成。")
 st.markdown("---")
 st.caption("Macro Alpha Pro | 核心算法：Isomap Non-linear Manifold, LassoCV Feature Selection, Asymmetric Risk Management")

@@ -527,7 +527,18 @@ with tab3:
 
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
-    
+    # 【修改点 1】：如果 auto_mode 开启，默认选择扫描到的资产
+    current_assets = list(PRESET_ASSETS.keys())
+    default_index = 0
+    if st.session_state.get("target_assets") in current_assets:
+        default_index = current_assets.index(st.session_state.target_assets)
+
+    c_left, c_right = st.columns([3, 1])
+    with c_left:
+        # 增加 index 参数，实现自动切换下拉框
+        choice = st.selectbox("选择审计资产包", current_assets, index=default_index, label_visibility="collapsed")
+    with c_right:
+        start_audit = st.button("🚀 启动全自动审计流", type="primary", use_container_width=True)
     # 顶部交互区
     c_left, c_right = st.columns([3, 1])
     with c_left:
@@ -535,12 +546,25 @@ with tab4:
     with c_right:
         start_audit = st.button("🚀 启动全自动审计流", type="primary", use_container_width=True)
 
+    # 确保初始化状态
     if "final_audit_state" not in st.session_state:
         st.session_state.final_audit_state = None
 
-    if start_audit:
+    # --- 关键修改点 1：增加自动触发判断 ---
+    auto_triggered = st.session_state.get("auto_mode", False)
+
+    # 如果点击了按钮 OR 侧边栏扫描器发出了自动指令
+    if start_audit or auto_triggered:
+        
+        # --- 关键修改点 2：进入后立刻重置自动模式，防止无限循环运行 ---
+        if auto_triggered:
+            st.session_state.auto_mode = False
+            
         with st.status("Agent 正在协同专家组...", expanded=True) as status:
-            # 1. 严格初始化状态，确保所有字段都有初始值
+            # 1. 严格初始化状态
+            # 注意：这里的 choice 会自动获取当前 selectbox 选中的值
+            # 由于我们在侧边栏已经改了 st.session_state.target_assets，
+            # 此时的 choice 已经是扫描器选出的新资产了。
             current_state = {
                 "target_assets": choice, 
                 "vix_level": vix_input, 
@@ -549,7 +573,7 @@ with tab4:
                 "quant_results": {}, 
                 "red_team_critique": "",
                 "technical_report": "", 
-                "audit_memo": "", # 确保这里的 key 与翻译节点返回的一致
+                "audit_memo": "", 
                 "is_robust": True
             }
             

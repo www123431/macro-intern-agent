@@ -702,7 +702,7 @@ with tab5:
         st.markdown("---")
         st.write("根据量化引擎筛选，该资产目前处于极佳风险收益比区间。")
         
-        if st.button("🔍 立即将该资产送往 [量化审计室] 进行深度证伪"):
+        if st.button("🔍 立即将该资产送往 [量化审计室] 进行深度证伪", type="primary", use_container_width=True):
             st.session_state.auto_trigger = True
             # 注意：这里不需要再 rerun，因为用户点击后会想看到变化，或者手动切到下一页
             st.toast(f"已将 {top_asset} 送往审计室！")

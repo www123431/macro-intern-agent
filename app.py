@@ -527,49 +527,29 @@ with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     
     current_assets = list(PRESET_ASSETS.keys())
-    
-    # --- 1. 获取并展示全行业扫描结果 ---
-    # 检查是否有从侧边栏传过来的扫描结果
-    scanned_asset = st.session_state.get("target_assets")
-    auto_triggered = st.session_state.get("auto_trigger", False)
 
-    if scanned_asset:
-        # 增加一个漂亮的高亮展示区
-        st.markdown(f"""
-        <div style="background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%); 
-                    padding: 20px; border-radius: 10px; color: white; margin-bottom: 20px;">
-            <h3 style="margin:0; color: white;">🤖 智能扫描建议</h3>
-            <p style="margin:5px 0 0 0; opacity: 0.9;">
-                基于最新市场波动率与夏普比率分析，当前推荐审计目标：
-                <strong style="font-size: 1.2em; color: #fbbf24;">{scanned_asset}</strong>
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
 
-    # --- 2. 交互区逻辑 ---
-    # 自动计算下拉框索引
-    default_index = current_assets.index(scanned_asset) if scanned_asset in current_assets else 0
-
+    # 2. 紧凑的交互区
     c_left, c_right = st.columns([3, 1])
     with c_left:
         choice = st.selectbox(
-            "手动调整审计目标", 
+            "确认审计目标", 
             current_assets, 
             index=default_index, 
-            key="audit_asset_selector_v5",
+            key="audit_asset_selector_v6",
             label_visibility="collapsed"
         )
     with c_right:
-        start_audit = st.button("🚀 启动全自动审计流", type="primary", use_container_width=True)
+        start_audit = st.button("🚀 启动深度审计", type="primary", use_container_width=True)
 
-    # --- 3. 审计流触发 ---
+    # 3. 审计触发器
+    auto_triggered = st.session_state.get("auto_trigger", False)
+
     if start_audit or auto_triggered:
-        # 进入后立即重置自动触发标记，但保留 target_assets 用于展示
         if auto_triggered:
-            st.session_state.auto_trigger = False
+            st.session_state.auto_trigger = False # 立即消费掉触发信号
         
-        # 确保 Agent 拿到的 choice 是最新的
-        with st.status(f"Agent 正在对 {choice} 执行深度审计...", expanded=True) as status:
+        with st.status(f"Agent 专家组正在介入：{choice}", expanded=True) as status:
             current_state = {
                 "target_assets": choice, 
                 "vix_level": vix_input, 

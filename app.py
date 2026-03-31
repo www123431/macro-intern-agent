@@ -205,22 +205,23 @@ with tab3:
 with tab4:
     st.header("🔢 专家审计：特征稀疏性与回测稳健性")
     
-    # 模拟数据包选择（保持不变）
+    # 1. 资产选择
     preset = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
     choice = st.selectbox("选择审计资产包", list(preset.keys()))
     
-    if st.button("🔄 执行专家深度审计", type="primary"):
+    # 2. 只有一个统一的审计按钮
+    if st.button("🔄 启动 AI 深度审计终端", type="primary", key="unified_audit_btn"):
         returns = QuantEngine.get_market_data(preset[choice])
         
         if not returns.empty:
-            # 1. 计算核心指标
+            # --- A. 量化计算 ---
             weights = np.array([1.0/len(returns.columns)]*len(returns.columns))
             d_var, a_ret, a_vol = QuantEngine.compute_asymmetric_risk(returns, vix_input, weights)
             y = returns.iloc[:, 0]; X = returns.shift(1).dropna(); y = y.iloc[1:]
             active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
             is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
 
-            # --- 升级版 UI: 状态监控面板 ---
+            # --- B. UI 状态面板 ---
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("动态 VaR (非对称)", f"{d_var:.2%}", delta="偏高" if d_var < -0.02 else "安全", delta_color="inverse")
             c2.metric("特征稀疏率", f"{sparsity:.1%}", delta="因子过载" if sparsity < 0.2 else "稀疏稳健", delta_color="normal")
@@ -229,60 +230,48 @@ with tab4:
 
             st.divider()
 
-            # --- 升级版 UI: 深度扫描分析 ---
+            # --- C. 可视化布局 ---
             col_l, col_r = st.columns([1, 1])
-            
             with col_l:
-                st.subheader("👁️ 市场流形结构 (Regime Map)")
+                st.subheader("👁️ 市场流形结构")
                 iso = Isomap(n_neighbors=5, n_components=2)
                 manifold = iso.fit_transform(returns)
-                df_iso = pd.DataFrame(manifold, columns=["结构维度1", "结构维度2"])
-                df_iso['Return'] = returns.mean(axis=1).values # 映射颜色
-                # 使用散点图展示流形聚类
-                st.scatter_chart(df_iso, x="结构维度1", y="结构维度2", color="Return", size=10)
-                st.caption("注：散点聚类反映了市场在特定宏观状态下的联动性。")
+                df_iso = pd.DataFrame(manifold, columns=["Dim 1", "Dim 2"])
+                df_iso['Return'] = returns.mean(axis=1).values
+                st.scatter_chart(df_iso, x="Dim 1", y="Dim 2", color="Return", size=10)
 
             with col_r:
-                st.subheader("🧬 因子贡献权重 (Lasso)")
-                # 展示特征权重条形图
+                st.subheader("🧬 因子贡献权重")
                 feat_importance = pd.DataFrame({'Factor': X.columns, 'Weight': coefs})
                 st.bar_chart(feat_importance, x="Factor", y="Weight")
-                st.info(f"专家建议：当前保留了 {active} 个关键特征。")
 
-            # --- 结论审计报告 ---
-            if is_robust:
-                st.success(f"✅ 审计结论：策略稳健。该策略在非线性流形中表现出良好的结构一致性，且通过了 Optimizer's Curse 检验。")
-            else:
-                st.warning(f"⚠️ 审计警告：检测到过度拟合迹象。建议增加特征稀疏惩罚或引入 Unitless 正则化。")
+            st.divider()
 
-            if st.button("🔄 执行专家深度审计", type="primary", key="audit_button_tab4"):
-                # [此处执行之前的 QuantEngine 和 StrategyAuditor 计算...]
-                # 假设计算结果已存入变量 d_var, sparsity, p_noise, active
-                
-                # 包装指标给 AI
+            # --- D. 重点：AI 自动化审计报告 (直接运行) ---
+            st.subheader("🤖 AI 专家深度审计报告")
+            with st.spinner("AI 审计师正在研读因子流形并撰写备忘录..."):
                 audit_metrics = {
                     "d_var": d_var,
                     "sparsity": sparsity,
                     "p_noise": p_noise,
                     "active": active
                 }
+                # 调用你之前定义的 get_ai_audit_report 函数
+                ai_report = get_ai_audit_report(audit_metrics, choice, vix_input)
                 
-                # --- UI 展示布局 ---
-                # (显示之前的 Metric Cards 和 Isomap 散点图)
+                # 华丽的容器展示
+                st.info("💡 以下结论由 Gemini 1.5 Flash 审计专家基于量化数据自动生成：")
+                st.markdown(ai_report)
                 
-                st.divider()
-                
-                # --- 重点：AI 自动化审计结论 ---
-                with st.expander("🤖 查看 AI 专家深度审计报告", expanded=True):
-                    with st.spinner("AI 审计师正在研读因子流形..."):
-                        ai_report = get_ai_audit_report(audit_metrics, choice, vix_input)
-                        st.markdown(ai_report)
-                        
-                        # 提供一键导出审计报告
-                        st.download_button(
-                            "📄 导出审计备忘录", 
-                            generate_docx_report(ai_report, f"Audit Report - {choice}"), 
-                            f"Audit_{choice}_{datetime.date.today()}.docx"
-                        )
+                # 提供导出功能
+                st.download_button(
+                    "📄 导出审计备忘录 (Docx)", 
+                    generate_docx_report(ai_report, f"Quantitative Audit - {choice}"), 
+                    f"Audit_{choice}_{datetime.date.today()}.docx",
+                    use_container_width=True
+                )
+        else:
+            st.error("无法获取市场数据，请检查网络或 Ticker 代码。")
+            
 st.markdown("---")
 st.caption("Macro Alpha Pro | 核心算法：Isomap Non-linear Manifold, LassoCV Feature Selection, Asymmetric Risk Management")

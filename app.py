@@ -55,7 +55,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🏛️ Macro Alpha: 四大专家协同研判终端")
+st.title("🏛️ Macro Alpha")
 
 # --- 2. 安全读取 Secrets ---
 try:

@@ -255,7 +255,7 @@ with tab4:
             else:
                 st.warning(f"⚠️ 审计警告：检测到过度拟合迹象。建议增加特征稀疏惩罚或引入 Unitless 正则化。")
 
-            if st.button("🔄 执行专家深度审计", type="primary"):
+            if st.button("🔄 执行专家深度审计", type="primary", key="audit_button_tab4"):
                 # [此处执行之前的 QuantEngine 和 StrategyAuditor 计算...]
                 # 假设计算结果已存入变量 d_var, sparsity, p_noise, active
                 

@@ -658,7 +658,7 @@ with tab4:
                 status.update(label="审计中断", state="error")
 
     # --- Tab 4 结果渲染区 (增强版) ---
-    if st.session_state.final_audit_state:
+    if st.session_state.get("final_audit_state"):
         s = st.session_state.final_audit_state
         q = s.get('quant_results', {})
         

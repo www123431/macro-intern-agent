@@ -185,52 +185,63 @@ def red_team_node(state: AgentState):
     """
     进化版红队节点：AI 驱动的逻辑证伪专家
     """
-    q = state['quant_results']
-    vix = state['vix_level']
-    macro_info = state.get('macro_context', "暂无宏观数据")
-    sector_info = state.get('sector_risks', "暂无行业数据")
+    # 安全获取数据，防止 KeyError
+    q = state.get('quant_results', {})
+    if not q:
+        return {"is_robust": False, "red_team_critique": "🔴 错误：未检测到量化研究数据。"}
+        
+    vix = state.get('vix_level', 20.0)
+    macro_info = state.get('macro_context', "暂无宏备研判数据")
+    sector_info = state.get('sector_risks', "暂无行业扫描数据")
     
     # 1. 基础数学审计 (硬性指标)
     math_critiques = []
-    if q['p_noise'] > 0.25:
-        math_critiques.append(f"🔴 统计噪音过高 ({q['p_noise']:.1%})，结果可能具有随机性。")
-    if q['active'] < 2:
+    p_noise = q.get('p_noise', 0)
+    active_features = q.get('active', 0)
+    
+    if p_noise > 0.25:
+        math_critiques.append(f"🔴 统计噪音过高 ({p_noise:.1%})，结果可能具有随机性。")
+    if active_features < 2:
         math_critiques.append("🔴 特征过于稀疏，模型存在严重的欠拟合风险。")
 
     # 2. AI 逻辑审计 (定性与定量联动)
-    # 构建发给 AI 的审计指令
     audit_prompt = f"""
     你是一名资深量化风险审计师。请对比以下【量化指标】与【外部环境】，寻找逻辑矛盾。
     
-    【资产包】: {state['target_assets']}
+    【资产包】: {state.get('target_assets', '未知资产')}
     【当前 VIX】: {vix}
-    【量化 VaR】: {q['d_var']:.2%}
+    【量化 VaR】: {q.get('d_var', 0):.2%}
     【宏观背景 (来自 Tab 1)】: {macro_info}
     【行业风险 (来自 Tab 3)】: {sector_info}
     
     任务：
-    1. 如果宏观显示有大风险（如加息、地缘政治），但量化 VaR 却很低，请指出“模型滞后性”风险。
-    2. 检查资产特性与环境的错配（例如：通胀环境下持有高杠杆资产）。
+    1. 如果宏观风险大但量化 VaR 低，指出“模型滞后性”。
+    2. 检查资产特性与环境的错配（如通胀下持有高杠杆资产）。
     3. 给出 1-2 句犀利的“证伪”意见。要求：专业、批判性、拒绝客套。
     """
     
     try:
+        # 假设 model 已在全局定义
         response = model.generate_content(audit_prompt)
         ai_critique = response.text
-    except:
-        ai_critique = "⚠️ AI 审计推理引擎暂时离线。"
+    except Exception as e:
+        ai_critique = f"⚠️ AI 审计推理引擎暂时离线。(错误: {str(e)})"
 
-    # 汇总意见
-    full_critique = "【数学审计】\n" + ("\n".join(math_critiques) if math_critiques else "🟢 统计指标基础稳健。")
-    full_critique += f"\n\n【AI 逻辑证伪】\n{ai_critique}"
+    # 3. 汇总意见
+    math_report = "【数学审计】\n" + ("\n".join(math_critiques) if math_critiques else "🟢 统计指标基础稳健。")
+    full_critique = f"{math_report}\n\n【AI 逻辑证伪】\n{ai_critique}"
 
-    # 判定逻辑：如果数学审计有红灯，或者 AI 意见中包含严重警告，则拦截
+    # 4. 判定逻辑：确保逻辑严密
+    # 如果数学指标严重超标（P-hacking > 30%），强制拦截
+    # 如果 AI 发现严重错配，也建议拦截
     is_robust = True
-    if math_critiques or "🚨" in ai_critique or "严重错配" in ai_critique:
-        is_robust = False if q['p_noise'] > 0.25 else True # 示例：仅在数学指标也差时彻底拦截
+    if p_noise > 0.30 or "🚨" in ai_critique or "严重错配" in ai_critique:
+        is_robust = False
 
+    # ⚠️ 关键修正：返回的字典键名必须与 AgentState 完全匹配
     return {
-        "technical_report": full_critique,
+        "red_team_critique": full_critique, # 对应 AgentState 中的红队意见字段
+        "technical_report": full_critique,  # 为了兼容 UI，同时更新技术报告
         "is_robust": is_robust
     }
 

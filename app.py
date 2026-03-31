@@ -745,7 +745,8 @@ with tab5:
         with col_s1:
             st.metric("推荐资产", top_asset)
         with col_s2:
-            st.metric("预期夏普比率", f"{res.get('sharpe', 2.14)}", delta="高收益区间")
+            sharpe_val = float(res.get('sharpe', 2.14))
+            st.metric("预期夏普比率", f"{sharpe_val:.2f}", delta="高收益区间")
         with col_s3:
             st.metric("市场契合度", f"{res.get('market_fit', 92)}%", delta="优选")
     

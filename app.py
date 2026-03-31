@@ -533,43 +533,38 @@ with tab4:
     if st.session_state.get("target_assets") in current_assets:
         default_index = current_assets.index(st.session_state.target_assets)
 
+    # 2. 顶部交互区：合并为一个 Row
     c_left, c_right = st.columns([3, 1])
+    
     with c_left:
-        # 增加 index 参数，实现自动切换下拉框
-        choice = st.selectbox("选择审计资产包", current_assets, index=default_index, label_visibility="collapsed")
-    with c_right:
-        start_audit = st.button("🚀 启动全自动审计流", type="primary", use_container_width=True)
-    # 顶部交互区
-    c_left, c_right = st.columns([3, 1])
-    with c_left:
+        # 使用唯一 key 确保状态稳定
         choice = st.selectbox(
             "选择审计资产包", 
-            list(PRESET_ASSETS.keys()), 
-            index=default_index, # 刚才帮你加的自动索引
-            key="audit_assets_selector_v2", # 👈 加上这个唯一的 key
+            current_assets, 
+            index=default_index, 
+            key="audit_asset_selector",
             label_visibility="collapsed"
         )
+        
     with c_right:
+        # 这里的 start_audit 会捕捉手动点击
         start_audit = st.button(
             "🚀 启动全自动审计流", 
             type="primary", 
             use_container_width=True,
-            key="main_audit_button_v2"  # 👈 加上这个唯一的 ID
+            key="run_audit_flow_btn"
         )
 
-    # 确保初始化状态
-    if "final_audit_state" not in st.session_state:
-        st.session_state.final_audit_state = None
-
-    # --- 关键修改点 1：增加自动触发判断 ---
-    auto_triggered = st.session_state.get("auto_mode", False)
+    # 3. 触发逻辑合并
+    # 只要满足：[手动点击按钮] OR [侧边栏触发了自动模式] 其中之一，就开启审计
+    auto_triggered = st.session_state.get("auto_trigger", False)
 
     # 如果点击了按钮 OR 侧边栏扫描器发出了自动指令
     if start_audit or auto_triggered:
         
         # --- 关键修改点 2：进入后立刻重置自动模式，防止无限循环运行 ---
         if auto_triggered:
-            st.session_state.auto_mode = False
+            st.session_state.auto_mode = True
             
         with st.status("Agent 正在协同专家组...", expanded=True) as status:
             # 1. 严格初始化状态

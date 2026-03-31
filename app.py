@@ -33,7 +33,7 @@ except Exception as e:
 
 # --- 3. 初始化 Gemini ---
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-2.0-latest')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # --- 4. 核心专家引擎集成 (统一合并) ---
 

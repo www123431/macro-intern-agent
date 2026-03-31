@@ -706,64 +706,58 @@ with tab4:
 
 with tab5:
     st.header("🤖 全球资产扫描建议")
-    res = st.session_state.get("scan_results")
-    # 从 session_state 获取扫描结果
-    # 假设 scanner.run_daily_scan() 返回的是一个包含多个资产信息的 List 或 Dict
-    scan_data = st.session_state.get("scan_results") 
+    
+    # 1. 统一从 session_state 获取扫描结果
+    # 注意：建议在侧边栏扫描逻辑中确保 scan_results 是一个包含 'name', 'sharpe', 'market_fit' 的字典
+    res = st.session_state.get("scan_results") 
 
-    if not scan_data:
+    # 情况 A: 还没有数据
+    if not res:
         st.info("💡 请点击侧边栏的 **[开启全行业自动扫描]** 按钮，获取实时投资机会。")
+    
+    # 情况 B: 已经有数据，开始渲染界面
     else:
-        # 1. 顶部冠军卡片
-        top_asset = st.session_state.get("target_assets")
+        # 提取关键变量
+        top_asset = res.get('name', '未知资产')
+        
+        # --- 1. 顶部冠军展示 ---
         st.success(f"🏆 本次扫描冠军：**{top_asset}**")
         
-        # 2. 展示扫描后的分析细节 (示例：可以用 DataFrame 展示排名)
-        # 这里你可以展示夏普比率、收益分布、波动率等
+        # --- 2. 指标看板 ---
         st.subheader("📊 扫描分析看板")
         col_s1, col_s2, col_s3 = st.columns(3)
-        col_s1.metric("推荐资产", top_asset)
-        col_s2.metric("预期夏普比率", "2.14", delta="高收益区间")
-        col_s3.metric("市场契合度", "92%", delta="优选")
-
+        with col_s1:
+            st.metric("推荐资产", top_asset)
+        with col_s2:
+            st.metric("预期夏普比率", f"{res.get('sharpe', 2.14)}", delta="高收益区间")
+        with col_s3:
+            st.metric("市场契合度", f"{res.get('market_fit', 92)}%", delta="优选")
     
-        if not res:
-            st.info("💡 请点击侧边栏的 **[开启全行业自动扫描]** 按钮，获取实时投资机会。")
-        else:
-            # --- 1. 顶部指标展示 ---
-            top_asset = res.get('name', '未知资产')
-            st.success(f"🏆 本次扫描冠军：**{top_asset}**")
-            
-            col_s1, col_s2, col_s3 = st.columns(3)
-            col_s1.metric("推荐资产", top_asset)
-            col_s2.metric("预期夏普比率", f"{res.get('sharpe', 2.14)}", delta="高收益区间")
-            col_s3.metric("市场契合度", f"{res.get('market_fit', 92)}%", delta="优选")
-    
-            # --- 2. AI 动态分析区 ---
-            # 核心修复点：检查是否已经有分析结果，没有则调用函数
-            if "ai_scan_analysis" not in st.session_state:
-                with st.spinner("AI 专家正在深度解读扫描数据..."):
-                    # 传入前面定义的 'model' 对象
+        # --- 3. AI 动态分析区 ---
+        # 逻辑：如果没有生成过理由，则调用生成函数
+        if "ai_scan_analysis" not in st.session_state:
+            with st.spinner("AI 专家正在深度解读扫描数据..."):
+                try:
+                    # 确保你的 generate_ai_reasons 函数接收 (name, data, model)
                     st.session_state.ai_scan_analysis = generate_ai_reasons(top_asset, res, model)
-            
-            with st.expander("📝 AI 首席分析师点评", expanded=True):
-                st.markdown(st.session_state.ai_scan_analysis)
-            
-            # --- 动作区 ---
-            if st.button("🔍 送往审计室证伪", type="primary"):
-                st.session_state.auto_trigger = True
-                st.toast(f"已将 {res['name']} 送往审计室！")
-        else:
-            st.info("💡 请先在侧边栏开启自动扫描。")
-
-        # 3. 这里的关键：引导用户去审计
-        st.markdown("---")
-        st.write("根据量化引擎筛选，该资产目前处于极佳风险收益比区间。")
+                except Exception as e:
+                    st.error(f"AI 生成失败: {str(e)}")
+                    st.session_state.ai_scan_analysis = "分析暂时不可用，请稍后重试。"
         
-        if st.button("🔍 立即将该资产送往 [量化审计室] 进行深度证伪", type="primary"):
+        # 展示 AI 点评
+        with st.expander("📝 AI 首席分析师点评", expanded=True):
+            st.markdown(st.session_state.ai_scan_analysis)
+        
+        # --- 4. 引导审计动作 ---
+        st.markdown("---")
+        st.write(f"💡 根据量化引擎筛选，**{top_asset}** 目前处于极佳风险收益比区间。")
+        
+        # 使用唯一 key 避免按钮冲突
+        if st.button("🚀 立即将该资产送往 [量化审计室] 进行深度证伪", type="primary", key="send_to_audit_tab5"):
             st.session_state.auto_trigger = True
-            # 注意：这里不需要再 rerun，因为用户点击后会想看到变化，或者手动切到下一页
+            st.session_state.target_assets = top_asset  # 同步 Tab 4 的下拉框
             st.toast(f"已将 {top_asset} 送往审计室！")
+            st.rerun() # 建议 rerun 以便其他 Tab 响应状态变化
 
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | 专注量化审计与合规决策")

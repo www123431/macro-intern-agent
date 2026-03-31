@@ -563,11 +563,18 @@ with tab4:
             col_score, col_status = st.columns([1, 2])
             with col_score:
                 st.metric("审计置信度", f"{int(score)}/100")
-            with col_status:
-                if s["is_robust"]:
-                    st.markdown("<h2 style='color:green; margin-top:0;'>💎 审计通过：高度可信</h2>", unsafe_allow_html=True)
-                else:
-                    st.markdown("<h2 style='color:red; margin-top:0;'>🚨 审计拦截：策略风险极高</h2>", unsafe_allow_html=True)
+           # --- 找到这一段进行替换 ---
+with col_status:
+    # 逻辑修正：置信度低于 80 不应称为“高度可信”
+    if score >= 85 and s["is_robust"]:
+        res_color, res_label = "green", "💎 审计通过：高度可信"
+    elif score >= 60 and s["is_robust"]:
+        res_color, res_label = "orange", "⚠️ 审计通过：中度参考"
+    else:
+        # 只要 score 低于 60 或者被红队拦截，统一显示红色
+        res_color, res_label = "red", "🚨 审计拦截：逻辑/统计存在重大缺陷"
+    
+    st.markdown(f"<h2 style='color:{res_color}; margin-top:0;'>{res_label}</h2>", unsafe_allow_html=True)
 
             # --- 第二层：分情况展示详细理由 ---
             

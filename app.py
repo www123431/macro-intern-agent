@@ -91,7 +91,7 @@ def render_tv_chart(symbol, title):
     <script>new TradingView.MediumWidget({{"symbols": [["{title}", "{symbol}|12M"]],"width": "100%", "height": 350, "locale": "zh_CN", "colorTheme": "light"}});</script></div>"""
     components.html(code, height=360)
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_ai_analysis(prompt_type, vix_val):
     """通用 AI 专家接口：处理宏观与行业研判"""
     vix_context = f"当前市场 VIX 风险指数为 {vix_val}。"

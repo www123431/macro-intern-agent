@@ -290,7 +290,15 @@ class AgentState(TypedDict):
     is_robust: bool         # 策略稳健性判定（由红队和数学指标共同决定）
     final_memo: str         # 综合宏观、行业、量化的 CEO 级最终审计简报
     
-PRESET_ASSETS = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
+# --- 找到你原来的 PRESET_ASSETS 位置，替换为以下逻辑 ---
+if "dynamic_assets" not in st.session_state:
+    st.session_state.dynamic_assets = {
+        "新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], 
+        "科技成长": ["NVDA", "AAPL", "MSFT"]
+    }
+
+# 为了兼容你后续代码里使用的 PRESET_ASSETS 变量名
+PRESET_ASSETS = st.session_state.dynamic_assets
 
 def research_node(state: AgentState):
     """量化研究节点：负责基础指标计算"""
@@ -557,33 +565,28 @@ with tab3:
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     
-    # --- 核心修复 A: 确保变量始终存在 (解决 NameError) ---
-    current_assets = list(PRESET_ASSETS.keys())
-    default_index = 0 
+    # 使用动态资产池
+    current_assets = list(st.session_state.dynamic_assets.keys())
     
-    # --- 核心修复 B: 优先级同步逻辑 ---
-    # 检查是否有从 Tab 5 传来的同步请求
+    # 计算默认索引
     sync_asset = st.session_state.get("audit_target_sync")
-    
     if sync_asset in current_assets:
-        # 如果有同步请求，强制计算其在列表中的索引
-        default_index = current_assets.index(sync_asset)
-        # 这里的关键是：不要在 if 里直接写 st.session_state.manual_audit_selector = sync_asset
-        # 而是通过 selectbox 的 index 参数来控制
-    
-    # --- 核心修复 C: 只有一个 selectbox，通过 index 控制状态 ---
+        default_idx = current_assets.index(sync_asset)
+    else:
+        default_idx = 0
+
+    # 渲染下拉框
     choice = st.selectbox(
         "选择审计目标", 
         current_assets, 
-        index=default_index,
-        key="manual_audit_selector" # 保持 key 绑定
+        index=default_idx,
+        key="manual_audit_selector"
     )
     
-    # 自动触发提示
     if st.session_state.get("auto_trigger"):
-        st.info(f"🔄 已自动加载来自扫描器的资产：**{choice}**")
-        # 如果想实现“传送即开始”，可以在这里加一句 start_audit = True
-        st.session_state["auto_trigger"] = False # 用完即焚，防止循环刷新
+        st.info(f"🔄 **已自动锁定扫描目标**：{choice}")
+        # 重置信号，避免循环刷新
+        st.session_state.auto_trigger = False
     
     # 确保这一行和 selectbox 垂直对齐
     start_audit = st.button("🚀 启动深度审计", type="primary", use_container_width=True)
@@ -784,23 +787,24 @@ with tab5:
         st.markdown("---")
         st.write(f"💡 根据量化引擎筛选，**{top_asset}** 目前处于极佳风险收益比区间。")
         
-        # --- Tab 5 引导审计动作部分 ---
+        # --- Tab 5 传送按钮部分 ---
         if st.button("🚀 立即将该资产送往 [量化审计室] 进行深度证伪", type="primary", key="send_to_audit_tab5"):
+            target = res.get('name')
             
-            # 动态检查：如果扫描出的资产不在 PRESET_ASSETS 里，手动加进去，防止 Tab 4 崩溃
-            if top_asset not in PRESET_ASSETS:
-                # 给它一个默认的空代码列表或基础代码
-                PRESET_ASSETS[top_asset] = [top_asset] 
+            # 1. 动态扩充资产池：如果审计室不认识这个资产，立刻帮它“注册”
+            if target not in st.session_state.dynamic_assets:
+                # 这里给它分配一个默认代码（例如全球能源对应 XLE）
+                st.session_state.dynamic_assets[target] = ["XLE", "VDE"] 
             
-            # 设置中转变量
-            st.session_state["audit_target_sync"] = top_asset 
+            # 2. 设置同步信号
+            st.session_state["audit_target_sync"] = target
             st.session_state["auto_trigger"] = True
             
-            # 清理掉旧的审计结果，确保跳转过去看到的是加载动画而不是旧报告
+            # 3. 清理旧审计状态
             if "final_audit_state" in st.session_state:
                 del st.session_state["final_audit_state"]
-            
-            st.toast(f"🎯 已锁定 {top_asset}，正在前往审计室...")
+                
+            st.toast(f"🎯 已成功同步：{target}")
             time.sleep(0.5)
             st.rerun()
 

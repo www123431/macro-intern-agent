@@ -567,25 +567,22 @@ with tab4:
             with col_score:
                 st.metric("审计置信度", f"{int(score)}/100")
            # --- 找到这一段进行替换 ---
-with col_status:
-    # 逻辑修正：置信度低于 80 不应称为“高度可信”
-    if score >= 85 and s["is_robust"]:
-        res_color, res_label = "green", "💎 审计通过：高度可信"
-    elif score >= 60 and s["is_robust"]:
-        res_color, res_label = "orange", "⚠️ 审计通过：中度参考"
-    else:
-        # 只要 score 低于 60 或者被红队拦截，统一显示红色
-        res_color, res_label = "red", "🚨 审计拦截：逻辑/统计存在重大缺陷"
-    
-    st.markdown(f"<h2 style='color:{res_color}; margin-top:0;'>{res_label}</h2>", unsafe_allow_html=True)
+            with col_status:
+                # 1. 逻辑修正：置信度与稳健性联动
+                if score >= 85 and s["is_robust"]:
+                    res_color, res_label = "green", "💎 审计通过：高度可信"
+                elif score >= 60 and s["is_robust"]:
+                    res_color, res_label = "orange", "⚠️ 审计通过：中度参考"
+                else:
+                    res_color, res_label = "red", "🚨 审计拦截：逻辑/统计存在重大缺陷"
+                
+                st.markdown(f"<h2 style='color:{res_color}; margin-top:0;'>{res_label}</h2>", unsafe_allow_html=True)
 
-            # --- 第二层：分情况展示详细理由 ---
-            
+            # --- 第二层：分情况展示详细理由 (确保此 if 与 with col_status 对齐) ---
             if not s["is_robust"]:
-                # 【关键增强】：当审计不通过时，展示红队的详细“证伪”理由
+                # 【拦截状态】：展示红队的详细“证伪”理由
                 st.error("### 🛑 详细拦截理由 (Red Team Audit Report)")
                 
-                # 创建一个醒目的警告框，展示红队的专业意见
                 st.markdown(f"""
                 <div style="background-color:#FFF5F5; padding:25px; border-radius:12px; border:2px solid #FEB2B2; color:#C53030;">
                     <h4 style="margin-top:0;">🚩 红队对抗性证伪结论：</h4>
@@ -593,22 +590,20 @@ with col_status:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # 同时展示量化指标，让用户知道是哪个硬指标触碰了底线
                 st.subheader("📊 风险指标溯源")
                 k1, k2, k3 = st.columns(3)
                 k1.metric("P-hacking 风险值", f"{q['p_noise']:.1%}", delta="超标" if q['p_noise']>0.3 else "正常", delta_color="inverse")
                 k2.metric("有效特征数", f"{q['active']}", delta="过低" if q['active']<2 else "正常", delta_color="inverse")
-                k3.metric("VaR 预警", f"{q['d_var']:.2%}")
+                k3.metric("VaR 预警", f"{q.get('d_var', 0):.2%}")
                 
                 st.info("💡 **专家建议**：请重新检查数据源是否包含未来函数，或降低模型复杂度（减少因子数量）后再尝试审计。")
 
             else:
-                # --- 原有的决策建议生成逻辑 (审计通过时) ---
+                # 【通过状态】：展示决策建议
                 st.subheader("💡 首席执行决策建议")
                 if s.get("audit_memo"):
                     st.info(s["audit_memo"])
                 
-                # 展示对比视图
                 audit_col1, audit_col2 = st.columns(2)
                 with audit_col1:
                     st.markdown("#### 🚩 红队合规意见")

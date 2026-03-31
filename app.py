@@ -167,7 +167,8 @@ class QuantEngine:
             return 20.0  # 如果抓取失败，返回中值基准
         except:
             return 20.0
-    
+
+
 # --- 5. 辅助功能 ---
 
 def generate_docx_report(content, title="Investment Memo"):
@@ -178,6 +179,35 @@ def generate_docx_report(content, title="Investment Memo"):
     for line in content.split('\n'): doc.add_paragraph(line)
     buf = BytesIO(); doc.save(buf); buf.seek(0)
     return buf
+
+def red_team_node(state: AgentState):
+    """
+    红队对抗节点：模拟‘恶意审计师’，专门寻找模型崩塌的场景 
+    """
+    q = state['quant_results']
+    vix = state['vix_level']
+    critiques = []
+    
+    # 1. 挑战因子稳健性：如果因子太少，可能存在严重过拟合风险 
+    if q['active'] <= 1:
+        critiques.append("🔴 **因子极度匮乏**: 模型当前仅依赖单一信号，在政经环境突变时极易失效。")
+    
+    # 2. 挑战 P-hacking 风险：衡量结果是否纯属“运气” 
+    if q['p_noise'] > 0.20:
+        critiques.append(f"🔴 **统计噪音过载**: 当前策略有 {q['p_noise']:.1%} 的概率纯属‘运气’，建议拒绝执行。")
+    
+    # 3. 挑战 VIX 适应性：检查是否低估了‘肥尾’风险 
+    if vix < 15 and q['d_var'] < 0.02:
+        critiques.append("🟡 **低波动陷阱**: 当前 VIX 极低，模型可能低估了尾部极端情况的风险。")
+
+    # 汇总批评意见
+    red_team_output = "\n".join(critiques) if critiques else "🟢 红队未发现明显统计性漏洞。"
+    
+    # 更新技术报告，并将 P-hacking 风险超过 25% 的策略标记为不稳健 
+    return {
+        "technical_report": f"【红队对抗性审查】\n{red_team_output}",
+        "is_robust": q['p_noise'] < 0.25 
+    }
 
 def render_tv_chart(symbol, title):
     code = f"""
@@ -296,20 +326,24 @@ def translator_node(state: AgentState):
     except:
         return {"audit_memo": "翻译决策生成失败。"}
 
-# 构建 Graph
+# 构建增强版对抗 Graph 
 builder = StateGraph(AgentState)
 
 builder.add_node("researcher", research_node)
+builder.add_node("red_team", red_team_node)     # 👈 新增红队质疑节点
 builder.add_node("auditor", technical_audit_node)
-builder.add_node("translator", translator_node) # 实装翻译官
+builder.add_node("translator", translator_node)
 
 builder.set_entry_point("researcher")
 
-# 逻辑流：计算 -> 审计 -> 翻译 (如果稳健)
+# 逻辑流：计算 -> 红队质疑 -> (通过则) 审计 -> 翻译 
+builder.add_edge("researcher", "red_team")
+
 builder.add_conditional_edges(
-    "researcher", 
-    lambda x: "auditor" if x["is_robust"] else END
+    "red_team", 
+    lambda x: "auditor" if x["is_robust"] else END  # 如果被红队毙掉，直接终止流程 
 )
+
 builder.add_edge("auditor", "translator")
 builder.add_edge("translator", END)
 

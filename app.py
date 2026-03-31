@@ -552,8 +552,8 @@ with tab4:
     # --- 4. 触发与执行 ---
     if start_audit:
     # 如果此时 session 中残留了自动触发标记，顺便清理掉，保持状态干净
-    if st.session_state.get("auto_trigger"):
-        st.session_state.auto_trigger = False
+        if st.session_state.get("auto_trigger"):
+            st.session_state.auto_trigger = False
         
         # ⚠️ 关键：Agent 这里的 target_assets 直接绑定 choice
         # 这样不管扫描结果是什么，Agent 只会审计你在下拉框里选中的那个

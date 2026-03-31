@@ -215,29 +215,65 @@ with tab3:
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     choice = st.selectbox("选择审计资产包", list(PRESET_ASSETS.keys()))
-    output_container = st.container()
+    
+    # 初始化 session_state 用于持久化展示结果
+    if "final_audit_state" not in st.session_state:
+        st.session_state.final_audit_state = None
+
     if st.button("🚀 启动全自动审计工作流", type="primary"):
         with st.status("Agent 正在协同专家组...", expanded=True) as status:
-            final_state = {"target_assets": choice, "vix_level": vix_input, "quant_results": {}, "is_robust": True, "audit_memo": ""}
-            for event in agent_executor.stream(final_state):
+            state = {"target_assets": choice, "vix_level": vix_input, "quant_results": {}, "is_robust": True, "audit_memo": ""}
+            for event in agent_executor.stream(state):
                 for node, update in event.items():
                     st.write(f"✅ {node} 任务处理完成")
-                    final_state.update(update)
+                    state.update(update)
+            # 将运行结果存入 session_state
+            st.session_state.final_audit_state = state
             status.update(label="审计流执行完毕", state="complete")
-        with output_container:
-            if "quant_results" in final_state and final_state["quant_results"]:
-                q = final_state['quant_results']
-                st.divider()
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("动态 VaR", f"{q['d_var']:.2%}"); c2.metric("特征稀疏率", f"{q['sparsity']:.1%}")
-                c3.metric("P-hacking 风险", f"{q['p_noise']:.1%}"); c4.metric("夏普比率", f"{(q['a_ret']-0.03)/q['a_vol']:.2f}")
-                st.subheader("🧬 因子贡献权重")
-                st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")
-                if final_state['is_robust']:
-                    st.subheader("🤖 AI 专家深度审计报告")
-                    st.markdown(final_state['audit_memo'])
-                else:
-                    st.error("⚠️ 策略统计风险过高，Agent 已拦截 AI 报告生成。")
 
+    # 渲染结果区域
+    if st.session_state.final_audit_state:
+        s = st.session_state.final_audit_state
+        
+        if s.get("quant_results"):
+            q = s['quant_results']
+            st.divider()
+            
+            # --- 第一层：结论先行 (Executive Summary) ---
+            if s.get("audit_memo") and s['is_robust']:
+                memo_parts = s["audit_memo"].split("###")
+                
+                # 提取 AI 生成的摘要部分 (假设 prompt 已更新为分层格式)
+                st.subheader("💡 首席执行决策建议")
+                if len(memo_parts) > 1:
+                    st.info(memo_parts[1]) # 显示摘要
+                else:
+                    st.markdown(s["audit_memo"])
+                
+                # --- 第二层：关键指标白话化 ---
+                st.subheader("🔍 关键洞察 (Key Insights)")
+                c1, c2, c3, c4 = st.columns(4)
+                # 将术语翻译为业务语言
+                c1.metric("压力下安全边际", f"{q['d_var']:.2%}", help="即 VaR，衡量极端情况下的潜在回撤")
+                c2.metric("模型决策清晰度", f"{q['sparsity']:.1%}", help="即特征稀疏率，衡量模型是否被噪音干扰")
+                c3.metric("表现真实信度", f"{q['p_noise']:.1%}", help="即 P-hacking 风险，衡量历史表现是否仅凭运气")
+                c4.metric("风险收益比", f"{(q['a_ret']-0.03)/q['a_vol']:.2f}", help="即夏普比率")
+
+                # --- 第三层：技术附录 (Technical Appendix) ---
+                with st.expander("🔬 查看量化审计技术细节 (Quant Tech Stack)"):
+                    st.subheader("🧬 因子贡献权重")
+                    st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")
+                    
+                    if len(memo_parts) > 2:
+                        st.markdown("###" + memo_parts[2]) # 关键洞察细节
+                    if len(memo_parts) > 3:
+                        st.markdown("###" + memo_parts[3]) # 技术细节
+                    
+                    st.download_button("📥 下载完整审计备忘录", 
+                                     generate_docx_report(s["audit_memo"], "Investment Audit Memo"), 
+                                     "Audit_Report.docx")
+            else:
+                st.error("⚠️ 策略统计风险过高，Agent 已拦截 AI 报告生成。")
+                st.warning(f"当前 P-hacking 风险值: {q['p_noise']:.2%} (阈值: 30%)")
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | Powered by LangGraph")

@@ -201,6 +201,10 @@ with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     choice = st.selectbox("选择审计资产包", list(PRESET_ASSETS.keys()))
     
+    # 初始化一个 session_state 来存储结果，防止 Streamlit 刷新后数据丢失
+    if "audit_results" not in st.session_state:
+        st.session_state.audit_results = None
+
     if st.button("🚀 启动全自动审计流", type="primary"):
         initial_input = {
             "target_assets": choice, 
@@ -211,24 +215,35 @@ with tab4:
         }
         
         with st.status("Agent 正在编排投研任务...", expanded=True) as status:
-            final_state = initial_input.copy()
+            # 运行 Agent 流程
+            current_state = initial_input.copy()
             for event in agent_executor.stream(initial_input):
                 for node_name, state_update in event.items():
                     st.write(f"✅ {node_name} 专家已完成分析")
-                    final_state.update(state_update)
-            status.update(label="审计流执行完毕", state="complete")
-        
-        if "quant_results" in final_state and final_state["quant_results"]:
-            q = final_state['quant_results']
+                    current_state.update(state_update)
             
-            # 指标展示
+            # 将最终状态存入 session_state
+            st.session_state.audit_results = current_state
+            status.update(label="审计流执行完毕", state="complete")
+
+    # --- 渲染逻辑：只要 session_state 里有数据就显示 ---
+    if st.session_state.audit_results:
+        res = st.session_state.audit_results
+        
+        if "quant_results" in res and res["quant_results"]:
+            q = res['quant_results']
+            
+            # 1. 核心指标卡片
+            st.divider()
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("动态 VaR", f"{q['d_var']:.2%}")
             c2.metric("特征稀疏率", f"{q['sparsity']:.1%}")
             c3.metric("P-hacking 风险", f"{q['p_noise']:.1%}")
-            c4.metric("夏普比率", f"{(q['a_ret']-0.03)/q['a_vol']:.2f}")
+            # 计算夏普比率需确保 a_ret 和 a_vol 存在
+            sharpe = (q.get('a_ret', 0) - 0.03) / q.get('a_vol', 1)
+            c4.metric("策略夏普比率", f"{sharpe:.2f}")
 
-            # 可视化展示
+            # 2. 可视化图表
             st.divider()
             col_l, col_r = st.columns(2)
             with col_l:
@@ -238,36 +253,23 @@ with tab4:
                 df_iso = pd.DataFrame(manifold, columns=["Dim 1", "Dim 2"])
                 df_iso['Return'] = q['returns'].mean(axis=1).values
                 st.scatter_chart(df_iso, x="Dim 1", y="Dim 2", color="Return")
+            
             with col_r:
                 st.subheader("🧬 因子贡献权重")
                 feat_importance = pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']})
                 st.bar_chart(feat_importance, x="Factor", y="Weight")
 
-            # AI 报告展示
-            # --- AI 审计结果与解释 ---
+            # 3. AI 报告
             st.divider()
-            if final_state['is_robust']:
+            if res.get('is_robust', False):
                 st.subheader("🤖 AI 专家深度审计报告")
-                st.success("✅ 策略通过稳健性初步筛选，进入深度解读：")
-                st.markdown(final_state['audit_memo'])
-                
-                # 下载按钮
-                st.download_button(
-                    "📥 下载审计备忘录", 
-                    generate_docx_report(final_state['audit_memo']), 
-                    f"Audit_{choice}_{datetime.date.today()}.docx"
-                )
+                if res.get('audit_memo'):
+                    st.markdown(res['audit_memo'])
+                    st.download_button("📥 下载审计备忘录", generate_docx_report(res['audit_memo']), "Audit_Report.docx")
+                else:
+                    st.warning("Agent 已完成计算，但 AI 审计报告内容为空，请检查 API 响应。")
             else:
                 st.subheader("⚠️ Agent 审计熔断")
-                st.error("检测到该策略存在显著的统计噪音风险（P-hacking），Agent 已拦截自动化结论。")
-                
-                # 给出具体改进建议
-                with st.expander("为什么我的策略被拦截？"):
-                    st.write(f"""
-                    1. **回测噪音系数**: {q['p_noise']:.2%} (阈值: 25%)
-                    2. **有效特征密度**: {q['active']} / {q['X'].shape[1]}
-                    3. **建议**: 减少滞后项因子的维度，或在 VIX 高波动期增加正则化强度。
-                    """)
-
+                st.error(f"检测到该策略 P-hacking 风险过高 ({q['p_noise']:.2%})，Agent 已自动拦截非稳健性结论。")
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | Powered by LangGraph & Gemini 2.5 Flash")

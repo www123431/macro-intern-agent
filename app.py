@@ -347,11 +347,27 @@ def generate_ai_reasons(asset_name, scan_data, ai_model): # <--- 增加 ai_model
     3. 每条理由带一个 Emoji，总字数控制在 150 字以内。
     """
     try:
-        # 使用 Gemini 原生方法 generate_content
         response = ai_model.generate_content(prompt)
         return response.text
+    
     except Exception as e:
-        return f"⚠️ AI 分析生成失败: {str(e)}"
+        # 将错误信息转为字符串进行匹配
+        error_msg = str(e)
+        
+        if "429" in error_msg or "quota" in error_msg.lower():
+            # 这里的样式可以根据你的金融终端风格调整
+            return """
+            ### ⏳ 首席分析师正在“闭关”
+            **当前状态**：AI 专家今日的研报额度已耗尽（API Quota Exceeded）。
+            
+            **建议操作**：
+            1. ☕ **稍后回来**：专家正在整理思路，请于 1 分钟后重新尝试。
+            2. 📊 **查看量化指标**：虽然 AI 文案暂时无法生成，但下方的 **夏普比率、资金流向** 等硬核数据依然实时有效。
+            3. 🔑 **升级密钥**：如需高频扫描，请检查侧边栏的 API 配置。
+            """
+        else:
+            # 其他未知错误的优雅处理
+            return f"⚠️ **系统提示**：AI 投研引擎发生暂时性波动 ({error_msg[:50]}...)"
 
 def technical_audit_node(state: AgentState):
     """审计节点：负责撰写硬核技术报告"""

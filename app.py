@@ -327,6 +327,29 @@ def research_node(state: AgentState):
         "is_robust": (p_noise < 0.3)
     }
 
+def generate_ai_reasons(asset_name, scan_data):
+    """
+    调用 LLM 根据扫描数据生成口语化的投资逻辑
+    """
+    prompt = f"""
+    你是一名资深基金经理助理。根据全行业扫描器的结果，资产【{asset_name}】被选为今日冠军。
+    
+    原始数据如下：
+    - 夏普比率: {scan_data.get('sharpe')}
+    - 市场契合度: {scan_data.get('market_fit')}%
+    - 资金流入排名: 前 {int((1-scan_data.get('fund_flow', 0.9))*100)}%
+    - 当前 VIX 环境: {st.session_state.get('vix_level', '未知')}
+    
+    请根据这些数据，提供3条极其口语化、专业且具有煽动性的推荐理由。
+    要求：
+    1. 像是在电梯里向老板汇报一样简洁。
+    2. 必须引用上述至少两个具体数据。
+    3. 每条理由带一个 Emoji，总字数控制在 150 字以内。
+    """
+    # 假设你已经定义了 llm 对象
+    response = llm.predict(prompt) 
+    return response
+
 def technical_audit_node(state: AgentState):
     """审计节点：负责撰写硬核技术报告"""
     q = state['quant_results']
@@ -698,18 +721,28 @@ with tab5:
         col_s2.metric("预期夏普比率", "2.14", delta="高收益区间")
         col_s3.metric("市场契合度", "92%", delta="优选")
 
-        # --- 👇 建议插入的位置：口语化理由与图表对比 ---
-        st.markdown("---") # 加一条分割线更清晰
+        # 获取扫描原始数据
+        res = st.session_state.get("scan_results")
         
-        # 1. 口语化理由（你提供的代码）
-        with st.expander("📝 为什么建议关注该资产？", expanded=True):
-            reasons = [
-                f"🔥 **动能强劲**：{top_asset} 过去一周的资金流入在所有板块中排名前 5%，属于典型的超跌反弹先锋。",
-                f"📊 **性价比高**：目前的夏普比率 (2.14) 远高于历史均值，意味着你承担的每一分风险都在超额换取回报。",
-                f"🧭 **宏观对冲**：在 VIX 波动率上升背景下，该资产展现出了极强的防御属性，适合现在的避险情绪。"
-            ]
-            for r in reasons:
-                st.write(r)
+        if res:
+            # --- AI 动态分析区 ---
+            if "ai_scan_analysis" not in st.session_state:
+                with st.spinner("AI 专家正在深度解读扫描数据..."):
+                    st.session_state.ai_scan_analysis = generate_ai_reasons(res['name'], res)
+            
+            with st.expander("📝 AI 首席分析师点评", expanded=True):
+                st.write(st.session_state.ai_scan_analysis)
+    
+            # --- 数据可视化区 (对比图表) ---
+            st.subheader("📊 扫描分析看板")
+            # 这里放置你之前的 Metric 和雷达图
+            
+            # --- 动作区 ---
+            if st.button("🔍 送往审计室证伪", type="primary"):
+                st.session_state.auto_trigger = True
+                st.toast(f"已将 {res['name']} 送往审计室！")
+        else:
+            st.info("💡 请先在侧边栏开启自动扫描。")
 
         # 3. 这里的关键：引导用户去审计
         st.markdown("---")

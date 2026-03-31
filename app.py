@@ -542,7 +542,13 @@ with tab4:
     # 顶部交互区
     c_left, c_right = st.columns([3, 1])
     with c_left:
-        choice = st.selectbox("选择审计资产包", list(PRESET_ASSETS.keys()), label_visibility="collapsed")
+        choice = st.selectbox(
+    "选择审计资产包", 
+    list(PRESET_ASSETS.keys()), 
+    index=default_index, # 刚才帮你加的自动索引
+    key="audit_assets_selector", # 👈 加上这个唯一的 key
+    label_visibility="collapsed"
+)
     with c_right:
         start_audit = st.button("🚀 启动全自动审计流", type="primary", use_container_width=True)
 

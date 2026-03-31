@@ -58,7 +58,7 @@ class StrategyAuditor:
 
 class QuantEngine:
     @staticmethod
-    @st.cache_data(ttl=3600)
+    @st.cache_data(ttl=3600, show_spinner=False)
     def get_market_data(tickers):
         try:
             data = yf.download(tickers, period="1y", progress=False)['Close']

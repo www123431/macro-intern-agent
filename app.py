@@ -101,6 +101,30 @@ def get_ai_analysis(prompt_type, news_context, vix_val):
     except Exception as e:
         return None, str(e)
 
+def get_ai_audit_report(metrics_dict, choice_name, vix_val):
+    """AI 审计专家：基于量化指标生成专业评述"""
+    prompt = f"""
+    你是一名资深量化风险审计师。请针对以下资产包的量化指标进行深度审计：
+    资产包：{choice_name}
+    当前市场 VIX 指数：{vix_input}
+    
+    量化指标：
+    1. 动态 VaR (非对称): {metrics_dict['d_var']:.2%} (反映极端下行风险)
+    2. 特征稀疏率: {metrics_dict['sparsity']:.1%} (反映模型是否过拟合)
+    3. P-hacking 概率: {metrics_dict['p_noise']:.1%} (反映回测可信度)
+    4. 有效特征数: {metrics_dict['active']} 个
+    
+    请按以下格式输出：
+    ### 🛡️ 专家审计意见
+    - **风险评级**：[稳健/谨慎/高风险] 并解释原因。
+    - **模型健康度**：评价特征选择是否合理，是否存在“维度灾难”。
+    - **实习生建议**：告诉用户如果要在实盘中使用，需要注意什么。
+    """
+    try:
+        return model.generate_content(prompt).text
+    except:
+        return "AI 审计插件暂时离线，请参考原始数值。"
+
 def render_tv_chart(symbol, title): # <--- 确保这里有两个参数
     """渲染 TradingView 交互微件"""
     code = f"""
@@ -231,5 +255,34 @@ with tab4:
             else:
                 st.warning(f"⚠️ 审计警告：检测到过度拟合迹象。建议增加特征稀疏惩罚或引入 Unitless 正则化。")
 
+            if st.button("🔄 执行专家深度审计", type="primary"):
+                # [此处执行之前的 QuantEngine 和 StrategyAuditor 计算...]
+                # 假设计算结果已存入变量 d_var, sparsity, p_noise, active
+                
+                # 包装指标给 AI
+                audit_metrics = {
+                    "d_var": d_var,
+                    "sparsity": sparsity,
+                    "p_noise": p_noise,
+                    "active": active
+                }
+                
+                # --- UI 展示布局 ---
+                # (显示之前的 Metric Cards 和 Isomap 散点图)
+                
+                st.divider()
+                
+                # --- 重点：AI 自动化审计结论 ---
+                with st.expander("🤖 查看 AI 专家深度审计报告", expanded=True):
+                    with st.spinner("AI 审计师正在研读因子流形..."):
+                        ai_report = get_ai_audit_report(audit_metrics, choice, vix_input)
+                        st.markdown(ai_report)
+                        
+                        # 提供一键导出审计报告
+                        st.download_button(
+                            "📄 导出审计备忘录", 
+                            generate_docx_report(ai_report, f"Audit Report - {choice}"), 
+                            f"Audit_{choice}_{datetime.date.today()}.docx"
+                        )
 st.markdown("---")
 st.caption("Macro Alpha Pro | 核心算法：Isomap Non-linear Manifold, LassoCV Feature Selection, Asymmetric Risk Management")

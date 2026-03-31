@@ -526,36 +526,41 @@ with tab3:
 with tab4:
     st.header("🔢 Agentic AI 深度审计终端")
     
+    # --- 1. 基础数据准备 ---
     current_assets = list(PRESET_ASSETS.keys())
-
-    # --- 1. 资产定位 (仅用于初始化 UI 状态) ---
-    # 这一步是为了让“扫描”和“审计”联动，不影响 Agent 的独立性
+    
+    # --- 2. 状态同步逻辑 (核心修复点) ---
+    # 尝试从 session_state 获取扫描建议，如果没有则默认 0
+    # 这样既能实现“自动填表”，又保证了 default_index 永远存在
     scanned_asset = st.session_state.get("target_assets")
-    default_idx = current_assets.index(scanned_asset) if scanned_asset in current_assets else 0
+    default_index = current_assets.index(scanned_asset) if scanned_asset in current_assets else 0
 
-    # 2. 紧凑的交互区
+    # --- 3. 极简交互区 ---
     c_left, c_right = st.columns([3, 1])
     with c_left:
+        # 这里定义的 choice 就是你“选的内容”
         choice = st.selectbox(
-            "确认审计目标", 
+            "选择审计目标", 
             current_assets, 
             index=default_index, 
-            key="audit_asset_selector_v6",
+            key="audit_asset_selector_v_final",
             label_visibility="collapsed"
         )
     with c_right:
         start_audit = st.button("🚀 启动深度审计", type="primary", use_container_width=True)
 
-    # 3. 审计触发器
+    # --- 4. 触发与执行 ---
     auto_triggered = st.session_state.get("auto_trigger", False)
 
     if start_audit or auto_triggered:
         if auto_triggered:
-            st.session_state.auto_trigger = False # 立即消费掉触发信号
+            st.session_state.auto_trigger = False
         
-        with st.status(f"Agent 专家组正在介入：{choice}", expanded=True) as status:
+        # ⚠️ 关键：Agent 这里的 target_assets 直接绑定 choice
+        # 这样不管扫描结果是什么，Agent 只会审计你在下拉框里选中的那个
+        with st.status(f"Agent 正在对 {choice} 执行深度审计...", expanded=True) as status:
             current_state = {
-                "target_assets": choice, 
+                "target_assets": choice,  # 认准 UI 选择
                 "vix_level": vix_input, 
                 "macro_context": st.session_state.get("macro_memo", "暂无数据"),
                 "sector_risks": st.session_state.get("sector_memo", "暂无数据"),

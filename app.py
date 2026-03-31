@@ -120,39 +120,106 @@ def get_ai_analysis(prompt_type, vix_val):
 
 # --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---
 
+# --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---
+
 class AgentState(TypedDict):
     target_assets: str
     vix_level: float
     quant_results: dict
     is_robust: bool
-    audit_memo: str
+    technical_report: str  # 新增：存储硬核技术审计
+    audit_memo: str       # 存储最终的 CEO 级简报
 
 PRESET_ASSETS = {"新加坡蓝筹": ["DBSDF", "U11.SI", "V03.SI"], "科技成长": ["NVDA", "AAPL", "MSFT"]}
 
 def research_node(state: AgentState):
+    """量化研究节点：负责基础指标计算"""
     returns = QuantEngine.get_market_data(PRESET_ASSETS[state['target_assets']])
     if returns.empty: return {"is_robust": False}
     weights = np.array([1.0/len(returns.columns)]*len(returns.columns))
     d_var, a_ret, a_vol = QuantEngine.compute_asymmetric_risk(returns, state['vix_level'], weights)
-    y = returns.iloc[:, 0]; X = returns.shift(1).fillna(0)
+    
+    y = returns.iloc[:, 0]
+    X = returns.shift(1).fillna(0)
     active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
     is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
-    return {"quant_results": {"d_var": d_var, "p_noise": p_noise, "sparsity": sparsity, "active": active, "coefs": coefs, "returns": returns, "X": X, "a_ret": a_ret, "a_vol": a_vol}, "is_robust": (p_noise < 0.3)}
+    
+    return {
+        "quant_results": {
+            "d_var": d_var, "p_noise": p_noise, "sparsity": sparsity, 
+            "active": active, "coefs": coefs, "returns": returns, 
+            "X": X, "a_ret": a_ret, "a_vol": a_vol
+        }, 
+        "is_robust": (p_noise < 0.3)
+    }
 
-def gemini_audit_node(state: AgentState):
+def technical_audit_node(state: AgentState):
+    """审计节点：负责撰写硬核技术报告"""
     q = state['quant_results']
-    prompt = f"针对资产 {state['target_assets']} 进行量化审计：VaR {q['d_var']:.2%}, P-hacking 风险 {q['p_noise']:.2%}。请以专家身份给出审计备忘录。"
+    prompt = f"""
+    你是一名量化风险审计师。请针对以下指标撰写一份【硬核技术报告】：
+    资产包: {state['target_assets']}
+    VIX环境: {state['vix_level']}
+    VaR: {q['d_var']:.2%}
+    Lasso特征数: {q['active']}
+    P-hacking 风险: {q['p_noise']:.2%}
+    
+    要求：使用专业量化术语，分析模型的统计稳健性、过拟合风险及非对称风险暴露。
+    """
+    try:
+        res = model.generate_content(prompt)
+        return {"technical_report": res.text}
+    except:
+        return {"technical_report": "技术审计调用失败。"}
+
+def translator_node(state: AgentState):
+    """翻译官节点：将技术报告重写为 CEO 级简报 (核心改进)"""
+    q = state['quant_results']
+    tech_report = state['technical_report']
+    
+    prompt = f"""
+    你是一名资深投研顾问，负责向基金经理（Fund Manager）汇报。
+    请根据下方的【硬核技术报告】，将其重写为【CEO 级分层简报】。
+    
+    原始报告内容：{tech_report}
+    
+    ### 严格遵循以下输出格式 ###
+    
+    ### 📢 首席执行决策建议 (Executive Summary)
+    [用直白、果断的决策建议起头：买入/持有/减仓。严禁统计术语，告诉老板“So What”。]
+    
+    ### 🔍 关键洞察 (Key Insights)
+    [将复杂指标翻译为业务语言：
+    - VaR -> 压力下的潜在亏损
+    - Sparsity -> 决策信号纯净度
+    - P-hacking -> 结果真实可信度]
+    
+    ### 🔬 技术附录 (Technical Appendix)
+    [保留硬核术语和具体数值，供量化同事复核。]
+    """
     try:
         res = model.generate_content(prompt)
         return {"audit_memo": res.text}
     except:
-        return {"audit_memo": "AI 审计调用失败。"}
+        return {"audit_memo": "翻译决策生成失败。"}
 
+# 构建 Graph
 builder = StateGraph(AgentState)
-builder.add_node("researcher", research_node); builder.add_node("auditor", gemini_audit_node)
+
+builder.add_node("researcher", research_node)
+builder.add_node("auditor", technical_audit_node)
+builder.add_node("translator", translator_node) # 实装翻译官
+
 builder.set_entry_point("researcher")
-builder.add_conditional_edges("researcher", lambda x: "auditor" if x["is_robust"] else END)
-builder.add_edge("auditor", END)
+
+# 逻辑流：计算 -> 审计 -> 翻译 (如果稳健)
+builder.add_conditional_edges(
+    "researcher", 
+    lambda x: "auditor" if x["is_robust"] else END
+)
+builder.add_edge("auditor", "translator")
+builder.add_edge("translator", END)
+
 agent_executor = builder.compile()
 
 # --- 7. 主界面布局 ---

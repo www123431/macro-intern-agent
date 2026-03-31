@@ -294,29 +294,35 @@ def get_ai_analysis(prompt_type, vix_val):
 class AnalyticsEngine:
     @staticmethod
     def calculate_metrics(df, confidence_level=0.95):
-        """
-        核心算法：全站统一的风险与收益计算模型
-        """
-        if df.empty:
+        # 错误点修复：df 是 DataFrame，不能直接 if df
+        if df is None or df.empty:
             return None
             
-        # 1. 计算收益率
+        # 计算收益率
         returns = df.pct_change().dropna()
         
-        # 2. 统一 VaR 计算 (历史模拟法)
-        # 确保 Tab 4 和 Tab 5 的置信度水平完全一致
-        var_val = np.percentile(returns, (1 - confidence_level) * 100)
+        # 如果是多只股票，计算组合收益率（假设等权重）
+        # 这是解决 "ambiguous" 报错的关键：将多列数据压缩成一列
+        if len(returns.columns) > 1:
+            portfolio_returns = returns.mean(axis=1)
+        else:
+            portfolio_returns = returns.iloc[:, 0]
+
+        if portfolio_returns.empty:
+            return None
+
+        # 使用压缩后的 portfolio_returns 进行计算
+        var_val = np.percentile(portfolio_returns, (1 - confidence_level) * 100)
         
-        # 3. 统一 Sharpe 计算
-        mean_ret = returns.mean() * 252
-        std_ret = returns.std() * np.sqrt(252)
+        mean_ret = portfolio_returns.mean() * 252
+        std_ret = portfolio_returns.std() * np.sqrt(252)
         sharpe = mean_ret / std_ret if std_ret != 0 else 0
         
         return {
             "var": var_val,
             "sharpe": sharpe,
             "volatility": std_ret,
-            "returns_series": returns # 返回序列供绘图使用
+            "returns_series": portfolio_returns 
         }
 
 # --- 6. LangGraph 智能体逻辑 (Tab 4 专用) ---

@@ -144,16 +144,28 @@ with tab1:
         st.info("💡 请点击左侧按钮启动专家协同研判。")
 
 with tab2:
-    st.subheader("📊 全球资产实时走廊")
-    # 第一排：核心避险与风险锚点
-    col1, col2 = st.columns(2)
-    with col1: render_tv_chart("OANDA:XAUUSD", "现货黄金 (Safe Haven)")
-    with col2: render_tv_chart("NASDAQ:NDX", "纳斯达克 100 (Risk On)")
+    st.subheader("📊 全球资产实时走廊 (全能专家版)")
     
-    # 第二排：新加坡本地宏观风向标
+    # 第一排：宏观风险锚点 (黄金 & 纳指)
+    col1, col2 = st.columns(2)
+    with col1: 
+        render_tv_chart("OANDA:XAUUSD", "现货黄金 (Safe Haven)")
+    with col2: 
+        render_tv_chart("NASDAQ:NDX", "纳斯达克 100 (Growth/Tech)")
+    
+    # 第二排：区域增长引擎 (海峡指数 & 沪深300)
     col3, col4 = st.columns(2)
-    with col3: render_tv_chart("FX_IDC:USDSGD", "美元/新币 (S$NEER Proxy)")
-    with col4: render_tv_chart("STI:STI", "海峡时报指数 (SG Blue Chips)")
+    with col3: 
+        render_tv_chart("STI:STI", "新加坡海峡指数 (SG Blue Chips)")
+    with col4: 
+        render_tv_chart("SSE:000300", "沪深 300 指数 (China A-Shares)")
+    
+    # 第三排：流动性与大宗商品 (美元新币 & 布伦特原油)
+    col5, col6 = st.columns(2)
+    with col5: 
+        render_tv_chart("FX_IDC:USDSGD", "美元/新币 (S$NEER Proxy)")
+    with col6: 
+        render_tv_chart("TVC:UKOIL", "布伦特原油 (Energy/Inflation)")
 
 with tab3:
     if btn_sector:

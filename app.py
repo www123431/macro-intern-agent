@@ -143,6 +143,18 @@ def research_node(state: AgentState):
     X = returns.shift(1).fillna(0)
     active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
     is_robust, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
+
+    p_noise = p_noise # P-hacking 风险
+    sparsity = sparsity # 特征稀疏度
+    
+    # 核心计算逻辑：100分为满分
+    # 1. P-hacking 惩罚：风险超过 10% 开始大幅扣分
+    # 2. 稀疏性惩罚：如果特征被删到只剩不到 2 个，说明模型在强行拟合
+    base_score = 100
+    penalty_p = max(0, (p_noise - 0.05) * 200) # 超过5%后，每增加1%扣2分
+    penalty_s = 20 if active < 2 else 0
+    
+    confidence_score = max(0, min(100, base_score - penalty_p - penalty_s))
     
     return {
         "quant_results": {
@@ -303,8 +315,29 @@ with tab4:
         s = st.session_state.final_audit_state
         
         if s.get("quant_results"):
-            q = s['quant_results']
-            st.divider()
+        q = s['quant_results']
+        score = q['confidence_score']
+        
+        # 定义颜色和评级
+        if score >= 80:
+            color = "green"
+            rating = "💎 高度可信 (High Integrity)"
+        elif score >= 50:
+            color = "orange"
+            rating = "⚠️ 中度参考 (Cautionary)"
+        else:
+            color = "red"
+            rating = "🚨 统计噪音警报 (Low Integrity)"
+
+        # 使用大号字体展示
+        st.divider()
+        col_left, col_right = st.columns([1, 3])
+        with col_left:
+            st.metric("审计置信度", f"{int(score)}/100")
+        with col_right:
+            st.subheader(f"审计状态：:{color}[{rating}]")
+            if score < 60:
+                st.warning("提示：由于 P-hacking 风险偏高或有效特征过少，AI 建议仅将此报告作为压力场景下的极端参考，而非主导决策依据。")
             
             # --- 第一层：结论先行 (Executive Summary) ---
             if s.get("audit_memo") and s['is_robust']:

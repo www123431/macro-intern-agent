@@ -185,14 +185,13 @@ def red_team_node(state: AgentState):
     """
     进化版红队节点：AI 驱动的逻辑证伪专家
     """
-    # 安全获取数据，防止 KeyError
     q = state.get('quant_results', {})
     if not q:
         return {"is_robust": False, "red_team_critique": "🔴 错误：未检测到量化研究数据。"}
         
     vix = state.get('vix_level', 20.0)
-    macro_info = state.get('macro_context', "暂无宏备研判数据")
-    sector_info = state.get('sector_risks', "暂无行业扫描数据")
+    macro_info = state.get('macro_context', "暂无宏观数据")
+    sector_info = state.get('sector_risks', "暂无行业数据")
     
     # 1. 基础数学审计 (硬性指标)
     math_critiques = []
@@ -204,24 +203,19 @@ def red_team_node(state: AgentState):
     if active_features < 2:
         math_critiques.append("🔴 特征过于稀疏，模型存在严重的欠拟合风险。")
 
-    # 2. AI 逻辑审计 (定性与定量联动)
+    # 2. AI 逻辑审计
     audit_prompt = f"""
     你是一名资深量化风险审计师。请对比以下【量化指标】与【外部环境】，寻找逻辑矛盾。
-    
-    【资产包】: {state.get('target_assets', '未知资产')}
-    【当前 VIX】: {vix}
-    【量化 VaR】: {q.get('d_var', 0):.2%}
-    【宏观背景 (来自 Tab 1)】: {macro_info}
-    【行业风险 (来自 Tab 3)】: {sector_info}
+    资产包: {state.get('target_assets', '未知')} | 当前 VIX: {vix} | 量化 VaR: {q.get('d_var', 0):.2%}
+    环境背景: {macro_info} | {sector_info}
     
     任务：
-    1. 如果宏观风险大但量化 VaR 低，指出“模型滞后性”。
-    2. 检查资产特性与环境的错配（如通胀下持有高杠杆资产）。
-    3. 给出 1-2 句犀利的“证伪”意见。要求：专业、批判性、拒绝客套。
+    1. 检查是否存在“低 VaR 与高市场波动环境”的错配。
+    2. 如果发现模型严重滞后或逻辑自相矛盾，请在回复中包含“🚨【拦截】”字样。
+    3. 给出 1-2 句犀利的“证伪”意见。
     """
     
     try:
-        # 假设 model 已在全局定义
         response = model.generate_content(audit_prompt)
         ai_critique = response.text
     except Exception as e:
@@ -231,18 +225,27 @@ def red_team_node(state: AgentState):
     math_report = "【数学审计】\n" + ("\n".join(math_critiques) if math_critiques else "🟢 统计指标基础稳健。")
     full_critique = f"{math_report}\n\n【AI 逻辑证伪】\n{ai_critique}"
 
-    # 4. 判定逻辑：确保逻辑严密
-    # 如果数学指标严重超标（P-hacking > 30%），强制拦截
-    # 如果 AI 发现严重错配，也建议拦截
+    # --- 4. 判定逻辑：核心改进区 ---
     is_robust = True
-    if p_noise > 0.30 or "🚨" in ai_critique or "严重错配" in ai_critique:
+    
+    # 定义“否决关键词”：如果 AI 的回复里包含这些词，说明逻辑崩了
+    veto_keywords = ["🚨", "拦截", "严重错配", "滞后性", "误导", "自欺欺人", "根本性矛盾"]
+    
+    # 拦截条件 1：数学指标触红线
+    if p_noise > 0.30 or active_features < 2:
         is_robust = False
+        
+    # 拦截条件 2：AI 发现逻辑漏洞（即使数学上看起来很稳健）
+    if any(word in ai_critique for word in veto_keywords):
+        is_robust = False
+        # 如果是因为 AI 拦截，我们可以在报告里加一句标识
+        if "🚨【拦截】" not in full_critique:
+            full_critique = "🚩 [AI 逻辑强制否决]\n" + full_critique
 
-    # ⚠️ 关键修正：返回的字典键名必须与 AgentState 完全匹配
     return {
-        "red_team_critique": full_critique, # 对应 AgentState 中的红队意见字段
-        "technical_report": full_critique,  # 为了兼容 UI，同时更新技术报告
-        "is_robust": is_robust
+        "red_team_critique": full_critique,
+        "technical_report": full_critique,
+        "is_robust": is_robust  # 👈 只有这个为 True，才会生成“决策建议”
     }
 
 def render_tv_chart(symbol, title):

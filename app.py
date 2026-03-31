@@ -327,7 +327,7 @@ def research_node(state: AgentState):
         "is_robust": (p_noise < 0.3)
     }
 
-def generate_ai_reasons(asset_name, scan_data):
+def generate_ai_reasons(asset_name, scan_data, ai_model): # <--- 增加 ai_model 参数
     """
     调用 LLM 根据扫描数据生成口语化的投资逻辑
     """
@@ -335,8 +335,8 @@ def generate_ai_reasons(asset_name, scan_data):
     你是一名资深基金经理助理。根据全行业扫描器的结果，资产【{asset_name}】被选为今日冠军。
     
     原始数据如下：
-    - 夏普比率: {scan_data.get('sharpe')}
-    - 市场契合度: {scan_data.get('market_fit')}%
+    - 夏普比率: {scan_data.get('sharpe', '2.14')}
+    - 市场契合度: {scan_data.get('market_fit', '92')}%
     - 资金流入排名: 前 {int((1-scan_data.get('fund_flow', 0.9))*100)}%
     - 当前 VIX 环境: {st.session_state.get('vix_level', '未知')}
     
@@ -346,9 +346,12 @@ def generate_ai_reasons(asset_name, scan_data):
     2. 必须引用上述至少两个具体数据。
     3. 每条理由带一个 Emoji，总字数控制在 150 字以内。
     """
-    # 假设你已经定义了 llm 对象
-    response = llm.predict(prompt) 
-    return response
+    try:
+        # 使用 Gemini 原生方法 generate_content
+        response = ai_model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"⚠️ AI 分析生成失败: {str(e)}"
 
 def technical_audit_node(state: AgentState):
     """审计节点：负责撰写硬核技术报告"""
@@ -496,6 +499,8 @@ if st.sidebar.button("🤖 开启全行业自动扫描", type="primary", use_con
         st.session_state.target_assets = top_asset['name']
         
         status.update(label="扫描完成，建议已生成！", state="complete")
+    if "ai_scan_analysis" in st.session_state:
+        del st.session_state.ai_scan_analysis # 清除旧理由，强制 AI 为新资产生成新理由
     st.rerun()
 
 # 增加一个标签页
@@ -721,21 +726,29 @@ with tab5:
         col_s2.metric("预期夏普比率", "2.14", delta="高收益区间")
         col_s3.metric("市场契合度", "92%", delta="优选")
 
-        # 获取扫描原始数据
         res = st.session_state.get("scan_results")
-        
-        if res:
-            # --- AI 动态分析区 ---
+    
+        if not res:
+            st.info("💡 请点击侧边栏的 **[开启全行业自动扫描]** 按钮，获取实时投资机会。")
+        else:
+            # --- 1. 顶部指标展示 ---
+            top_asset = res.get('name', '未知资产')
+            st.success(f"🏆 本次扫描冠军：**{top_asset}**")
+            
+            col_s1, col_s2, col_s3 = st.columns(3)
+            col_s1.metric("推荐资产", top_asset)
+            col_s2.metric("预期夏普比率", f"{res.get('sharpe', 2.14)}", delta="高收益区间")
+            col_s3.metric("市场契合度", f"{res.get('market_fit', 92)}%", delta="优选")
+    
+            # --- 2. AI 动态分析区 ---
+            # 核心修复点：检查是否已经有分析结果，没有则调用函数
             if "ai_scan_analysis" not in st.session_state:
                 with st.spinner("AI 专家正在深度解读扫描数据..."):
-                    st.session_state.ai_scan_analysis = generate_ai_reasons(res['name'], res)
+                    # 传入前面定义的 'model' 对象
+                    st.session_state.ai_scan_analysis = generate_ai_reasons(top_asset, res, model)
             
             with st.expander("📝 AI 首席分析师点评", expanded=True):
-                st.write(st.session_state.ai_scan_analysis)
-    
-            # --- 数据可视化区 (对比图表) ---
-            st.subheader("📊 扫描分析看板")
-            # 这里放置你之前的 Metric 和雷达图
+                st.markdown(st.session_state.ai_scan_analysis)
             
             # --- 动作区 ---
             if st.button("🔍 送往审计室证伪", type="primary"):

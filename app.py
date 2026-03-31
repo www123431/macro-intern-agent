@@ -514,27 +514,41 @@ with tab4:
 
     if start_audit:
         with st.status("Agent 正在协同专家组...", expanded=True) as status:
-            # 初始化状态
+            # 1. 严格初始化状态，确保所有字段都有初始值
             current_state = {
                 "target_assets": choice, 
                 "vix_level": vix_input, 
+                "macro_context": st.session_state.get("macro_memo", "暂无数据"),
+                "sector_risks": st.session_state.get("sector_memo", "暂无数据"),
                 "quant_results": {}, 
-                "is_robust": True, 
+                "red_team_critique": "",
                 "technical_report": "", 
-                "audit_memo": "",
-                "macro_context": st.session_state.get("macro_memo", "暂无数据"), # 建议注入 Tab1 数据
-                "sector_risks": st.session_state.get("sector_memo", "暂无数据")   # 建议注入 Tab3 数据
+                "audit_memo": "", # 确保这里的 key 与翻译节点返回的一致
+                "is_robust": True
             }
             
-            # --- 修复后的循环逻辑 ---
-            for event in agent_executor.stream(current_state):
-                for node_name, node_output in event.items():
-                    st.write(f"✅ {node_name} 任务处理完成")
-                    # 只更新节点输出的实际键值对，例如 {"quant_results": {...}}
-                    current_state.update(node_output) 
-            
-            st.session_state.final_audit_state = current_state
-            status.update(label="审计流执行完毕", state="complete")
+            # 2. 增强版流式循环
+            try:
+                for event in agent_executor.stream(current_state):
+                    if not event: continue  # 过滤空事件
+                    
+                    for node_name, node_output in event.items():
+                        st.write(f"✅ {node_name} 任务处理完成")
+                        
+                        # 核心修复：确保 node_output 是字典且不为空
+                        if isinstance(node_output, dict):
+                            # 使用 dict.update 之前先过滤掉 None 值
+                            clean_output = {k: v for k, v in node_output.items() if v is not None}
+                            current_state.update(clean_output)
+                        else:
+                            st.warning(f"节点 {node_name} 返回了异常数据类型")
+                            
+                st.session_state.final_audit_state = current_state
+                status.update(label="审计流执行完毕", state="complete")
+                
+            except Exception as e:
+                st.error(f"审计流运行出错: {str(e)}")
+                status.update(label="审计中断", state="error")
 
     # 结果渲染区
     if st.session_state.final_audit_state:

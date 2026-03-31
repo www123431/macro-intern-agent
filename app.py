@@ -609,6 +609,6 @@ with tab4:
 
             # --- 第三层：可视化（无论通不通过都显示，方便排查） ---
             with st.expander("🔬 查看量化底稿 (Quantitative Backing)"):
-                st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")统已拦截决策建议生成。")
+                st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | 专注量化审计与合规决策")

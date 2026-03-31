@@ -463,7 +463,7 @@ with st.sidebar:
 
     # --- 找到侧边栏“🤖 开启全行业自动扫描”部分 ---
 # --- 侧边栏修改 ---
-if st.sidebar.button("🤖 开启全行业自动扫描"):
+if st.sidebar.button("🤖 开启全行业自动扫描", type="primary", use_container_width=True):
     with st.status("正在扫描全球市场板块...", expanded=True) as status:
         scanner = MarketScanner()
         top_asset = scanner.run_daily_scan() # 假设这里返回详细信息

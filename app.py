@@ -135,9 +135,16 @@ with tab1:
         st.info("💡 请点击左侧按钮启动专家协同研判。")
 
 with tab2:
-    c1, c2 = st.columns(2)
-    with c1: render_tv_chart("OANDA:XAUUSD")
-    with c2: render_tv_chart("NASDAQ:NDX")
+    st.subheader("📊 全球资产实时走廊")
+    # 第一排：核心避险与风险锚点
+    col1, col2 = st.columns(2)
+    with col1: render_tv_chart("OANDA:XAUUSD", "现货黄金 (Safe Haven)")
+    with col2: render_tv_chart("NASDAQ:NDX", "纳斯达克 100 (Risk On)")
+    
+    # 第二排：新加坡本地宏观风向标
+    col3, col4 = st.columns(2)
+    with col3: render_tv_chart("FX_IDC:USDSGD", "美元/新币 (S$NEER Proxy)")
+    with col4: render_tv_chart("STI:STI", "海峡时报指数 (SG Blue Chips)")
 
 with tab3:
     if btn_sector:

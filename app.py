@@ -101,9 +101,18 @@ def get_ai_analysis(prompt_type, news_context, vix_val):
     except Exception as e:
         return None, str(e)
 
-def render_tv_chart(symbol):
-    code = f"""<div style="height:350px;"><script src="https://s3.tradingview.com/tv.js"></script>
-    <script>new TradingView.MediumWidget({{"symbols": [["{symbol}", "{symbol}|12M"]], "width": "100%", "height": 350, "locale": "zh_CN", "colorTheme": "light"}});</script></div>"""
+def render_tv_chart(symbol, title): # <--- 确保这里有两个参数
+    """渲染 TradingView 交互微件"""
+    code = f"""
+    <div style="height:350px; margin-bottom: 20px;">
+    <script src="https://s3.tradingview.com/tv.js"></script>
+    <script>
+    new TradingView.MediumWidget({{
+      "symbols": [["{title}", "{symbol}|12M"]],
+      "width": "100%", "height": 350, "locale": "zh_CN", "colorTheme": "light", "autosize": true
+    }});
+    </script>
+    </div>"""
     components.html(code, height=360)
 
 def fetch_live_news_context():

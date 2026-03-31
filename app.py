@@ -461,18 +461,27 @@ with st.sidebar:
     st.info("💡 **系统状态**: 当前处于【首席审计模式】，Agent 将优先检查统计稳健性。")
     st.caption("数据源: CBOE Real-time / Yahoo Finance")
 
-    # 在 Streamlit 侧边栏增加功能
+    # --- 侧边栏：全行业自动扫描按钮 ---
     if st.sidebar.button("🤖 开启全行业自动扫描"):
         with st.status("正在扫描全球市场板块...", expanded=True) as status:
+            # 1. 运行独立的扫描引擎
             scanner = MarketScanner()
             top_asset = scanner.run_daily_scan()
             
-            st.write(f"✅ 扫描完成！发现机会：**{top_asset['name']}**")
+            st.write(f"✅ 扫描完成！发现高夏普比率机会：**{top_asset['name']}**")
             
-            # 自动更新 Session State，触发后续的 LangGraph 审计流
+            # 2. 自动同步到全局状态
+            # 这里确保你的资产选择下拉框 (selectbox) 的 index 会随之改变
             st.session_state.target_assets = top_asset['name']
-            st.session_state.auto_mode = True
-            status.update(label="扫描完毕，已转入深度审计流", state="complete")
+            
+            # 3. 核心触发逻辑：模拟“点击启动审计流”的行为
+            # 我们设置一个标记位，让主页面感知到需要自动开始
+            st.session_state.auto_trigger = True 
+            
+            status.update(label=f"已定位 {top_asset['name']}，正在初始化深度审计流...", state="complete")
+        
+        # 强制 Streamlit 重新运行以触发主界面的业务逻辑
+        st.rerun()
 
 # 使用分栏美化 Tab 标题
 tab1, tab2, tab3, tab4 = st.tabs(["🧠 首席宏观研判", "📈 实时仪表盘", "🛡️ 行业风险穿透", "🔢 量化审计室"])

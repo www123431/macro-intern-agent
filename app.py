@@ -550,7 +550,7 @@ with tab4:
                 st.error(f"审计流运行出错: {str(e)}")
                 status.update(label="审计中断", state="error")
 
-    # 结果渲染区
+    # --- Tab 4 结果渲染区 (增强版) ---
     if st.session_state.final_audit_state:
         s = st.session_state.final_audit_state
         q = s.get('quant_results', {})
@@ -558,63 +558,57 @@ with tab4:
         if q:
             score = q.get('confidence_score', 0)
             
-            # --- 第一层：审计概览 (Audit Overview) ---
+            # --- 第一层：审计概览 ---
             st.divider()
             col_score, col_status = st.columns([1, 2])
             with col_score:
                 st.metric("审计置信度", f"{int(score)}/100")
             with col_status:
-                res_color = "green" if score >= 80 else "orange" if score >= 50 else "red"
-                res_label = "💎 高度可信" if score >= 80 else "⚠️ 中度参考" if score >= 50 else "🚨 统计噪音警报"
-                st.markdown(f"<h2 style='color:{res_color}; margin-top:0;'>{res_label}</h2>", unsafe_allow_html=True)
-
-            # --- 第二层：首席执行决策建议 (Executive Summary) ---
-            if s.get("audit_memo") and s.get("is_robust"):
-                st.subheader("💡 首席执行决策建议")
-                memo_parts = s["audit_memo"].split("###")
-                exec_txt = memo_parts[1] if len(memo_parts) > 1 else s["audit_memo"]
-                
-                # 如果红队有警告，决策建议框变黄，增加紧迫感
-                if "🔴" in s.get("technical_report", ""):
-                    st.warning(f"**【风控提示版】**\n{exec_txt}")
+                if s["is_robust"]:
+                    st.markdown("<h2 style='color:green; margin-top:0;'>💎 审计通过：高度可信</h2>", unsafe_allow_html=True)
                 else:
-                    st.info(exec_txt)
+                    st.markdown("<h2 style='color:red; margin-top:0;'>🚨 审计拦截：策略风险极高</h2>", unsafe_allow_html=True)
 
-                # --- 第三层：红队对抗与原始审计 (主体分层布局) ---
-                st.subheader("🛡️ 审计深度穿透 (Audit Deep-Dive)")
+            # --- 第二层：分情况展示详细理由 ---
+            
+            if not s["is_robust"]:
+                # 【关键增强】：当审计不通过时，展示红队的详细“证伪”理由
+                st.error("### 🛑 详细拦截理由 (Red Team Audit Report)")
                 
-                # 使用两列布局对比“红队质疑”与“原始审计”
-                audit_col1, audit_col2 = st.columns(2)
+                # 创建一个醒目的警告框，展示红队的专业意见
+                st.markdown(f"""
+                <div style="background-color:#FFF5F5; padding:25px; border-radius:12px; border:2px solid #FEB2B2; color:#C53030;">
+                    <h4 style="margin-top:0;">🚩 红队对抗性证伪结论：</h4>
+                    {s.get('red_team_critique', '未获取到详细证伪理由。')}
+                </div>
+                """, unsafe_allow_html=True)
                 
-                with audit_col1:
-                    st.markdown("#### 🚩 红队对抗性审查")
-                    if "【红队对抗性审查】" in s.get("technical_report", ""):
-                        critique = s["technical_report"].split("【红队对抗性审查】")[-1]
-                        st.markdown(f"""<div style="background-color:#FFF5F5; padding:15px; border-radius:10px; border:1px solid #FEB2B2;">
-                            {critique}</div>""", unsafe_allow_html=True)
-                    else:
-                        st.success("🟢 红队扫描完毕：未发现明显统计性漏洞。")
+                # 同时展示量化指标，让用户知道是哪个硬指标触碰了底线
+                st.subheader("📊 风险指标溯源")
+                k1, k2, k3 = st.columns(3)
+                k1.metric("P-hacking 风险值", f"{q['p_noise']:.1%}", delta="超标" if q['p_noise']>0.3 else "正常", delta_color="inverse")
+                k2.metric("有效特征数", f"{q['active']}", delta="过低" if q['active']<2 else "正常", delta_color="inverse")
+                k3.metric("VaR 预警", f"{q['d_var']:.2%}")
+                
+                st.info("💡 **专家建议**：请重新检查数据源是否包含未来函数，或降低模型复杂度（减少因子数量）后再尝试审计。")
 
-                with audit_col2:
-                    st.markdown("#### 📝 原始技术审计意见")
-                    raw_tech = s.get("technical_report", "").split("【红队对抗性审查】")[0]
-                    st.markdown(f"""<div style="background-color:#F8FAFC; padding:15px; border-radius:10px; border:1px solid #E2E8F0; color:#475569; font-size:0.9em;">
-                        {raw_tech if raw_tech else "技术审计内容生成中..."}</div>""", unsafe_allow_html=True)
-
-                # --- 第四层：核心指标与可视化 ---
-                st.subheader("🔍 关键洞察 (Key Insights)")
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("压力回撤 (VaR)", f"{q['d_var']:.2%}", help="95%置信度下的潜在损失")
-                k2.metric("信号纯净度", f"{q['sparsity']:.1%}", help="有效因子占比")
-                k3.metric("统计真实信度", f"{q['p_noise']:.1%}", help="排除P-hacking后的真实性")
-                k4.metric("夏普比率", f"{(q['a_ret']-0.03)/q['a_vol']:.2f}" if q['a_vol']>0 else "0.00")
-
-                with st.expander("🔬 查看因子权重与下载报告"):
-                    st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")
-                    st.download_button("📥 下载正式审计备忘录 (.docx)", 
-                                     generate_docx_report(s["audit_memo"], "Investment Audit Memo"), 
-                                     "Audit_Report.docx", use_container_width=True)
             else:
-                st.error("⚠️ **审计拦截**: 由于红队判定该策略不稳健（统计噪音或过拟合风险过高），系统已拦截决策建议生成。")
+                # --- 原有的决策建议生成逻辑 (审计通过时) ---
+                st.subheader("💡 首席执行决策建议")
+                if s.get("audit_memo"):
+                    st.info(s["audit_memo"])
+                
+                # 展示对比视图
+                audit_col1, audit_col2 = st.columns(2)
+                with audit_col1:
+                    st.markdown("#### 🚩 红队合规意见")
+                    st.success(s.get("red_team_critique", "未发现明显统计性漏洞。"))
+                with audit_col2:
+                    st.markdown("#### 📝 原始技术审计")
+                    st.caption(s.get("technical_report", "技术审计内容生成中..."))
+
+            # --- 第三层：可视化（无论通不通过都显示，方便排查） ---
+            with st.expander("🔬 查看量化底稿 (Quantitative Backing)"):
+                st.bar_chart(pd.DataFrame({'Factor': q['X'].columns, 'Weight': q['coefs']}), x="Factor", y="Weight")统已拦截决策建议生成。")
 st.markdown("---")
 st.caption("Macro Alpha Pro | NUS MSBA Project | 专注量化审计与合规决策")

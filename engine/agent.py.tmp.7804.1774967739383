@@ -1,0 +1,175 @@
+from typing import TypedDict
+
+import numpy as np
+from langgraph.graph import END, StateGraph
+
+from engine.quant import AnalyticsEngine, QuantEngine, StrategyAuditor
+
+
+class AgentState(TypedDict):
+    # 输入
+    target_assets: str
+    vix_level: float
+    macro_context: str
+    sector_risks: str
+    # 中间态
+    quant_results: dict
+    red_team_critique: str
+    technical_report: str
+    # 输出
+    is_robust: bool
+    final_memo: str
+
+
+def build_agent_graph(model, preset_assets: dict):
+    """
+    工厂函数：将 model 和 preset_assets 通过闭包注入各节点，
+    避免全局变量依赖，返回已编译的 agent_executor。
+    """
+
+    def research_node(state: AgentState) -> dict:
+        tickers = tuple(preset_assets.get(state["target_assets"], []))
+        returns = QuantEngine.get_market_data(tickers)
+        if returns.empty:
+            return {"is_robust": False, "quant_results": {}}
+
+        weights = np.full(len(returns.columns), 1.0 / len(returns.columns))
+        d_var, a_ret, a_vol = QuantEngine.compute_asymmetric_risk(
+            returns, state["vix_level"], weights
+        )
+        y = returns.iloc[:, 0]
+        X = returns.shift(1).fillna(0)
+        active, sparsity, coefs = StrategyAuditor.run_feature_sparsity_check(X, y)
+        _, p_noise = StrategyAuditor.check_optimizer_curse(0.05, 0.045, 100)
+
+        penalty_p = max(0, (p_noise - 0.05) * 200)
+        penalty_s = 20 if active < 2 else 0
+        confidence_score = max(0, min(100, 100 - penalty_p - penalty_s))
+
+        return {
+            "quant_results": {
+                "d_var": d_var,
+                "p_noise": p_noise,
+                "sparsity": sparsity,
+                "active": active,
+                "coefs": coefs,
+                "returns": returns,
+                "X": X,
+                "a_ret": a_ret,
+                "a_vol": a_vol,
+                "confidence_score": confidence_score,
+            },
+            "is_robust": p_noise < 0.3,
+        }
+
+    def red_team_node(state: AgentState) -> dict:
+        q = state.get("quant_results") or {}
+        if not q:
+            return {"is_robust": False, "red_team_critique": "🔴 错误：未检测到量化研究数据。"}
+
+        vix = state.get("vix_level", 20.0)
+        p_noise = q.get("p_noise", 0)
+        active_features = q.get("active", 0)
+
+        math_critiques = []
+        if p_noise > 0.25:
+            math_critiques.append(f"🔴 统计噪音过高 ({p_noise:.1%})，结果可能具有随机性。")
+        if active_features < 2:
+            math_critiques.append("🔴 特征过于稀疏，模型存在严重的欠拟合风险。")
+
+        audit_prompt = f"""
+        你是一名资深量化风险审计师。请对比以下【量化指标】与【外部环境】，寻找逻辑矛盾。
+        资产包: {state.get('target_assets', '未知')} | 当前 VIX: {vix} | 量化 VaR: {q.get('d_var', 0):.2%}
+        环境背景: {state.get('macro_context', '暂无')} | {state.get('sector_risks', '暂无')}
+
+        任务：
+        1. 检查是否存在"低 VaR 与高市场波动环境"的错配。
+        2. 如果发现模型严重滞后或逻辑自相矛盾，请在回复中包含"🚨【拦截】"字样。
+        3. 给出 1-2 句犀利的"证伪"意见。
+        """
+        try:
+            ai_critique = model.generate_content(audit_prompt).text
+        except Exception as e:
+            ai_critique = f"⚠️ AI 审计推理引擎暂时离线。(错误: {e})"
+
+        math_report = "【数学审计】\n" + (
+            "\n".join(math_critiques) if math_critiques else "🟢 统计指标基础稳健。"
+        )
+        full_critique = f"{math_report}\n\n【AI 逻辑证伪】\n{ai_critique}"
+
+        veto_keywords = ["🚨", "拦截", "严重错配", "滞后性", "误导", "自欺欺人", "根本性矛盾"]
+        is_robust = not (
+            p_noise > 0.30
+            or active_features < 2
+            or any(w in ai_critique for w in veto_keywords)
+        )
+        if not is_robust and "🚨【拦截】" not in full_critique:
+            full_critique = "🚩 [AI 逻辑强制否决]\n" + full_critique
+
+        return {
+            "red_team_critique": full_critique,
+            "technical_report": full_critique,
+            "is_robust": is_robust,
+        }
+
+    def technical_audit_node(state: AgentState) -> dict:
+        q = state["quant_results"]
+        prompt = f"""
+        你是一名量化风险审计师。请针对以下指标撰写一份【硬核技术报告】：
+        资产包: {state['target_assets']}
+        VIX环境: {state['vix_level']}
+        VaR: {q['d_var']:.2%}
+        Lasso特征数: {q['active']}
+        P-hacking 风险: {q['p_noise']:.2%}
+
+        要求：使用专业量化术语，分析模型的统计稳健性、过拟合风险及非对称风险暴露。
+        """
+        try:
+            return {"technical_report": model.generate_content(prompt).text}
+        except Exception:
+            return {"technical_report": "技术审计调用失败。"}
+
+    def translator_node(state: AgentState) -> dict:
+        tech_report = state.get("technical_report", "")
+        prompt = f"""
+        你是一名资深投研顾问，负责向基金经理（Fund Manager）汇报。
+        请根据下方的【硬核技术报告】，将其重写为【CEO 级分层简报】。
+
+        原始报告内容：{tech_report}
+
+        ### 严格遵循以下输出格式 ###
+
+        ### 📢 首席执行决策建议 (Executive Summary)
+        [用直白、果断的决策建议起头：买入/持有/减仓。严禁统计术语，告诉老板"So What"。]
+
+        ### 🔍 关键洞察 (Key Insights)
+        [将复杂指标翻译为业务语言：
+        - VaR -> 压力下的潜在亏损
+        - Sparsity -> 决策信号纯净度
+        - P-hacking -> 结果真实可信度]
+
+        ### 🔬 技术附录 (Technical Appendix)
+        [保留硬核术语和具体数值，供量化同事复核。]
+        """
+        try:
+            return {"audit_memo": model.generate_content(prompt).text}
+        except Exception:
+            return {"audit_memo": "翻译决策生成失败。"}
+
+    # --- 构建图 ---
+    builder = StateGraph(AgentState)
+    builder.add_node("researcher", research_node)
+    builder.add_node("red_team", red_team_node)
+    builder.add_node("auditor", technical_audit_node)
+    builder.add_node("translator", translator_node)
+
+    builder.set_entry_point("researcher")
+    builder.add_edge("researcher", "red_team")
+    builder.add_conditional_edges(
+        "red_team",
+        lambda x: "auditor" if x["is_robust"] else END,
+    )
+    builder.add_edge("auditor", "translator")
+    builder.add_edge("translator", END)
+
+    return builder.compile()

@@ -1,0 +1,86 @@
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Tab 5 扫描结果送往 Tab 4 时，每个资产名对应的审计用 ticker 列表。
+# 使用 ETF 本身作为代理，保持与扫描器数据源一致。
+AUDIT_TICKERS: dict[str, list[str]] = {
+    "AI算力": ["SMH"],
+    "科技成长": ["QQQ"],
+    "沪深300": ["ASHR"],
+    "新加坡蓝筹": ["EWS"],
+    "全球能源": ["XLE"],
+}
+
+
+class MarketScanner:
+    def __init__(self):
+        self.watchlist = {
+            "AI算力": "SMH",
+            "科技成长": "QQQ",
+            "沪深300": "ASHR",
+            "新加坡蓝筹": "EWS",
+            "全球能源": "XLE",
+        }
+
+    def _fetch(self, ticker: str, period: str = "60d") -> pd.DataFrame:
+        """下载历史数据，失败时抛出异常而非静默忽略。"""
+        df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        if df.empty:
+            raise ValueError(f"无法获取 {ticker} 的数据")
+        return df
+
+    def _compute_metrics(self, name: str, ticker: str) -> dict:
+        """计算单个资产的全部指标，包含真实的 market_fit 和 fund_flow。"""
+        df = self._fetch(ticker)
+        close = df["Close"].squeeze()
+        volume = df["Volume"].squeeze()
+
+        returns = close.pct_change().dropna()
+
+        # 年化夏普比率
+        ann_return = returns.mean() * 252
+        vol = returns.std() * np.sqrt(252)
+        sharpe = float(ann_return / vol) if vol > 0 else 0.0
+
+        # 区间动能（总涨幅）
+        momentum = float((close.iloc[-1] / close.iloc[0]) - 1)
+
+        # 资金流入比：近 10 日均量 / 全期均量，反映近期资金活跃度
+        recent_vol = volume.iloc[-10:].mean()
+        avg_vol = volume.mean()
+        fund_flow = float(recent_vol / avg_vol) if avg_vol > 0 else 1.0
+
+        return {
+            "name": name,
+            "ticker": ticker,
+            "sharpe": sharpe,
+            "volatility": vol,
+            "momentum": momentum,
+            "fund_flow": fund_flow,
+            "last_price": float(close.iloc[-1]),
+        }
+
+    def run_daily_scan(self) -> dict:
+        """扫描全部资产，选出夏普比率最高的资产，并附带真实的 market_fit。"""
+        results = []
+        for name, ticker in self.watchlist.items():
+            try:
+                results.append(self._compute_metrics(name, ticker))
+            except Exception as e:
+                logger.warning("扫描 %s (%s) 失败: %s", name, ticker, e)
+
+        if not results:
+            raise RuntimeError("所有资产扫描均失败，请检查网络或数据源。")
+
+        # market_fit：当前资产夏普比率在全部候选中的百分位（0-100）
+        sharpes = np.array([r["sharpe"] for r in results])
+        for r in results:
+            rank = float(np.sum(sharpes <= r["sharpe"])) / len(sharpes)
+            r["market_fit"] = round(rank * 100, 1)
+
+        best = max(results, key=lambda x: x["sharpe"])
+        return best

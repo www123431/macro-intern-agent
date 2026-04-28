@@ -1,0 +1,105 @@
+import datetime
+from io import BytesIO
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import yfinance as yf
+from docx import Document
+from sklearn.linear_model import LassoCV
+
+
+class StrategyAuditor:
+    @staticmethod
+    def run_feature_sparsity_check(X, y):
+        common_index = X.index.intersection(y.index)
+        X, y = X.loc[common_index], y.loc[common_index]
+        lasso = LassoCV(cv=5).fit(X, y)
+        active_features = int(np.sum(np.abs(lasso.coef_) > 1e-10))
+        sparsity = 1 - (active_features / X.shape[1])
+        return active_features, sparsity, lasso.coef_
+
+    @staticmethod
+    def check_optimizer_curse(val_score, test_score, n_trials):
+        luck_factor = np.log1p(n_trials) * 0.01
+        gap = max(0, val_score - test_score)
+        prob_noise = 1 - np.exp(-gap / (luck_factor + 1e-6))
+        return gap <= luck_factor, prob_noise
+
+
+class QuantEngine:
+    @staticmethod
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def get_market_data(tickers: tuple) -> pd.DataFrame:
+        """返回日收益率 DataFrame；tickers 必须是 tuple 以支持缓存。"""
+        try:
+            data = yf.download(list(tickers), period="1y", progress=False)["Close"]
+            if isinstance(data, pd.Series):
+                data = data.to_frame()
+            return data.pct_change().fillna(0)
+        except Exception:
+            return pd.DataFrame()
+
+    @staticmethod
+    def compute_asymmetric_risk(
+        returns: pd.DataFrame, vix: float, weights: np.ndarray
+    ) -> tuple[float, float, float]:
+        port_ret = returns.dot(weights)
+        alpha = 0.05 * (1 + (vix - 20) / 40) if vix > 20 else 0.05
+        dynamic_var = float(np.quantile(port_ret, min(alpha, 0.2)))
+        return dynamic_var, float(port_ret.mean() * 252), float(port_ret.std() * np.sqrt(252))
+
+    @staticmethod
+    def get_realtime_vix() -> float:
+        try:
+            vix_data = yf.download("^VIX", period="1d", progress=False)
+            if not vix_data.empty:
+                return round(float(vix_data["Close"].iloc[-1]), 2)
+        except Exception:
+            pass
+        return 20.0
+
+
+class AnalyticsEngine:
+    @staticmethod
+    def calculate_metrics(df: pd.DataFrame, confidence_level: float = 0.95) -> dict | None:
+        if df is None or df.empty:
+            return None
+        returns = df.pct_change().dropna()
+        portfolio_returns = returns.mean(axis=1) if len(returns.columns) > 1 else returns.iloc[:, 0]
+        if portfolio_returns.empty:
+            return None
+        var_val = float(np.percentile(portfolio_returns, (1 - confidence_level) * 100))
+        mean_ret = portfolio_returns.mean() * 252
+        std_ret = portfolio_returns.std() * np.sqrt(252)
+        return {
+            "var": var_val,
+            "sharpe": float(mean_ret / std_ret) if std_ret != 0 else 0.0,
+            "volatility": float(std_ret),
+            "returns_series": portfolio_returns,
+        }
+
+
+def fetch_raw_data(tickers: list, period: str = "1y") -> pd.DataFrame:
+    """抓取历史收盘价，失败时返回空 DataFrame。"""
+    if not tickers:
+        return pd.DataFrame()
+    try:
+        data = yf.download(tickers, period=period, interval="1d", progress=False)
+        close = data["Close"] if isinstance(data.columns, pd.MultiIndex) else data[["Close"]]
+        return close.ffill().dropna()
+    except Exception:
+        return pd.DataFrame()
+
+
+def generate_docx_report(content: str, title: str = "Investment Memo") -> BytesIO:
+    doc = Document()
+    doc.add_heading("Macro Alpha Intelligence", 0)
+    doc.add_heading(title, level=1)
+    doc.add_paragraph(f"Report Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    for line in content.split("\n"):
+        doc.add_paragraph(line)
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf

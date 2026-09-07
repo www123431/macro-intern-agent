@@ -33,7 +33,7 @@ from engine.operator_console.schema import (
     SessionType,
 )
 from engine.operator_console.worker import (
-    run_job, get_or_create_queue, request_cancellation,
+    run_job, get_or_create_queue, subscribe_queue, request_cancellation,
 )
 # Importing the stations package auto-registers all attached stations.
 # Phase 1.1 (2026-06-23): S1 Paper Ingest registers here.
@@ -298,20 +298,44 @@ async def stream_job(job_id: str):
     Phase 1.1: real implementation. Connects to the per-job queue
     populated by the worker; yields stage_started / stage_progress /
     stage_completed / stage_failed / log / job_terminal events as
-    they arrive. Closes the stream on `job_terminal` event."""
+    they arrive. Closes the stream on `job_terminal` event.
+
+    v18 (2026-06-28): switched from `get_or_create_queue` to
+    `subscribe_queue`. The old accessor created an orphan queue
+    when the subscriber connected AFTER the worker had already
+    finished + cleaned up — that queue would never receive a write
+    and never be evicted (per-late-subscriber leak). Now if the
+    queue is absent, we emit a terminal snapshot directly and exit
+    without ever touching JOB_QUEUES."""
     job = store.get_job(job_id)
     if job is None:
         raise HTTPException(404, f"job '{job_id}' not found")
 
-    queue = get_or_create_queue(job_id)
+    queue = subscribe_queue(job_id)
+
+    # Late subscriber: worker already finished + swept the queue,
+    # OR job hasn't actually started running yet (race with trigger).
+    # Either way, no live queue to drain — snapshot + exit. Critically,
+    # we do NOT create an orphan queue here.
+    if queue is None:
+        async def terminal_snapshot():
+            yield {
+                "event": "snapshot",
+                "data":  json.dumps({"job_id": job_id, "state": job["state"]}),
+            }
+            yield {
+                "event": "job_terminal",
+                "data":  json.dumps({"job_id": job_id, "state": job["state"]}),
+            }
+        return EventSourceResponse(terminal_snapshot())
 
     async def event_generator():
         # Send a snapshot first so the client immediately knows the
-        # current state (e.g. if connecting late, after the worker
-        # already finished and the queue cleanup window passed)
+        # current state (e.g. if connecting late while worker is
+        # still mid-stage)
         yield {
             "event": "snapshot",
-            "data": json.dumps({"job_id": job_id, "state": job["state"]}),
+            "data":  json.dumps({"job_id": job_id, "state": job["state"]}),
         }
         # Drain the queue. Each item is {"event": str, "data": json}
         # produced by worker.QueueSSEEmitter. Stop on job_terminal.

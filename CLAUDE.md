@@ -349,4 +349,39 @@ new deployed sleeve MUST set `source_verdict_event_id`** to either:
 
 ---
 
-## (Add other project-wide doctrines below as they are locked.)
+## Orchestration Protocol (2026-07-12, STANDING)
+
+This project is one of THREE parallel projects sharing a Chief-of-Staff (Cowork) coordination layer. Shared orchestration folder: `${REPO_ROOT}\Desktop\orchestration\`.
+
+### At session START (before any real work):
+
+1. **Read** `${REPO_ROOT}\Desktop\orchestration\STATUS-macroalpha.md`
+   — the state I left after last session
+2. **Read** `${REPO_ROOT}\Desktop\orchestration\HANDOFF-macroalpha.md`
+   — messages/asks that other agents (Cowork / onlyfunds / 求职 Claude Code) left for this project. Process each item in "待处理" section, then move to "已处理" with a note on what you did.
+
+### At session END (before user closes chat):
+
+Overwrite `${REPO_ROOT}\Desktop\orchestration\STATUS-macroalpha.md` filling in these 5 fields (keep the ## headings):
+- Last Session (ISO timestamp)
+- What_I_Did (concrete outcomes, mention commit hashes if relevant)
+- What_I_Left (unfinished work, blockers)
+- What_I_Need_From_Others (if you need onlyfunds/求职/Cowork to do something, ALSO write it into their HANDOFF file)
+- Next_Session_Priorities (top 1-3 for next macroalpha session)
+
+### If you need another project to do something:
+
+**Append** a new entry to `${REPO_ROOT}\Desktop\orchestration\HANDOFF-{target}.md` under "待处理". Format:
+
+```
+### YYYY-MM-DD · from macroalpha
+**Subject**: (one-line summary)
+**Context**: (why this matters, evidence, verified numbers)
+**Action requested**: (concrete ask)
+**Blocker if not done**: (impact on your work if this doesn't happen)
+```
+
+### Rationale
+
+The user runs 3+ parallel Claude Code sessions across macroalpha / onlyfunds / 求职, plus a Cowork Chief-of-Staff. Real-time inter-agent communication is impossible. This file-based async protocol is how coordination happens. Skipping the START read or the END write means the user loses cross-project visibility for a whole day.
+

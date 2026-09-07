@@ -105,22 +105,55 @@ def _step_crawl(arxiv_max: int, nber: bool) -> dict:
 
 
 def _step_filter(max_filter: int) -> dict:
-    """Step 3: judge unjudged papers with the filter (DeepSeek)."""
+    """Step 3: judge unjudged papers with the filter (DeepSeek).
+
+    v30 (2026-07-01): dedup now also considers summaries.jsonl. A
+    small class of legacy papers were summarized via backfill scripts
+    before 2026-06-21 that wrote to summaries.jsonl WITHOUT adding
+    the intermediate FilterJudgment row. Pre-v30, the filter would
+    re-judge those legacy papers on every daily run — wasting
+    DeepSeek cost AND (worse) producing new judgments that could
+    disagree with the older acceptance implied by the existing
+    summary → summaries.jsonl and judgments.jsonl silently diverge.
+
+    Concrete case that motivated the fix (2026-07-01):
+      ssrn.6076487 + ssrn.6761438 were summarized 2026-06-14 with
+      triggered_by=auto_yes but have no 6/14 judgment row. Every
+      subsequent daily run re-judged them (cost ~$0.004 per + risk
+      of contradiction).
+
+    `orphan_summaries` in the return dict is a diagnostic count of
+    the drift so future audits can see the legacy backlog shrinking
+    over time (new papers all flow through both stores).
+    """
     from engine.agents.papers_curator import load_cache
     from engine.agents.papers_curator.filter import judge_paper
     from engine.agents.papers_curator.judgments_store import (
         latest_by_paper, append_judgment,
     )
+    from engine.agents.papers_curator.summaries_store import (
+        latest_by_paper as latest_summaries,
+    )
 
     candidates = load_cache()
-    judged_map = latest_by_paper()
+    judged_map     = latest_by_paper()
+    summarized_map = latest_summaries()
+    # v30 observability: papers with a summary but no judgment row —
+    # the legacy backfill artifact this fix protects against. Not an
+    # error, just a diagnostic.
+    orphan_summaries = sum(
+        1 for key in summarized_map if key not in judged_map
+    )
+
     unjudged = [
         c for c in candidates
         if (c.source, c.source_id) not in judged_map
+        and (c.source, c.source_id) not in summarized_map
     ]
     if not unjudged:
-        return {"unjudged_total": 0, "judged_now": 0, "yes": 0, "no": 0,
-                  "errors": 0}
+        return {"unjudged_total":    0, "judged_now": 0, "yes": 0, "no": 0,
+                  "errors":           0,
+                  "orphan_summaries": orphan_summaries}
     # Cost cap: only judge first max_filter unjudged this run
     batch = unjudged[:max_filter]
     yes_count = no_count = err_count = 0
@@ -140,11 +173,12 @@ def _step_filter(max_filter: int) -> dict:
                             c.source, c.source_id, exc)
             err_count += 1
     return {
-        "unjudged_total": len(unjudged),
-        "judged_now":     len(batch),
-        "yes":            yes_count,
-        "no":             no_count,
-        "errors":         err_count,
+        "unjudged_total":    len(unjudged),
+        "judged_now":        len(batch),
+        "yes":               yes_count,
+        "no":                no_count,
+        "errors":            err_count,
+        "orphan_summaries":  orphan_summaries,
     }
 
 

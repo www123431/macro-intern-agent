@@ -9,20 +9,40 @@ the job terminal.
 In-process queue model:
     JOB_QUEUES: dict[job_id, asyncio.Queue]
     Each SSE endpoint subscriber dequeues events for its job_id.
-    Worker pushes; subscriber pulls; queue is created lazily.
+    Worker pushes; subscriber pulls; queue is created lazily on the
+    worker side (`get_or_create_queue`). Subscribers MUST use
+    `subscribe_queue` instead, which is query-only — see "Orphan
+    queue leak" below.
 
 Server-restart caveat (R6): jobs running when uvicorn restarts are
 orphaned — queue lost, worker died. routes_operator_console restart
 scan marks them RECOVERED_UNKNOWN. Out-of-scope to persist queue
 state in MVP; see docs/architecture/operator_console.md Risk #5.
+
+Orphan queue leak (v18 fix, 2026-06-28):
+    Pre-v18, SSE subscribers called `get_or_create_queue` directly.
+    If a subscriber connected AFTER the worker finished + called
+    `cleanup_job`, the call would create a NEW empty queue that no
+    producer would ever write to. Subscriber would timeout at 60s,
+    check terminal state, return — but the orphan queue stayed in
+    JOB_QUEUES forever (small leak per late subscriber).
+
+    v18 splits the accessor: workers use `get_or_create_queue`
+    (creates on demand), subscribers use `subscribe_queue` (returns
+    None if absent). When subscribe_queue returns None, SSE
+    endpoint emits terminal snapshot directly and exits without
+    ever creating a queue. Belt-and-suspenders: `sweep_stale_queues`
+    periodically removes any queue whose corresponding job has been
+    terminal for > 5 minutes.
 """
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from engine.operator_console import emit as opcon_emit
 from engine.operator_console import registry, store
@@ -47,14 +67,139 @@ JOB_QUEUES: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 JOB_CANCELLATIONS: dict[str, CancellationToken] = {}
 
 
+# Job states that mean "worker has finished, nothing more will be
+# pushed to this queue". Sweep uses this to identify candidates for
+# eviction. RUNNING / QUEUED stay protected because the worker is
+# still (or may still be) writing.
+_TERMINAL_STATES: frozenset[str] = frozenset({
+    JobState.COMPLETED.value,
+    JobState.FAILED.value,
+    JobState.CANCELLED.value,
+    JobState.HALTED_COST_CAP.value,
+    JobState.RECOVERED_UNKNOWN.value,
+})
+
+
+# Default grace period before a terminal-state job's queue is swept.
+# Long enough for a slow SSE subscriber that connected RIGHT as the
+# worker finished to drain any pre-cleanup events; short enough that
+# we don't pile up dead queues in a long-running process.
+SWEEP_GRACE_SECONDS: int = 300                    # 5 min
+
+
 def get_or_create_queue(job_id: str) -> asyncio.Queue[dict[str, Any]]:
-    """Lazy queue creation. Returned to both worker (push) and SSE
-    endpoint (pull)."""
+    """Worker-side accessor. Lazy queue creation — worker calls this
+    when starting a job, so the queue exists before any subscriber
+    can hit `subscribe_queue` and pull events.
+
+    Subscribers MUST use `subscribe_queue` instead. See module
+    docstring "Orphan queue leak" for why this matters.
+    """
     q = JOB_QUEUES.get(job_id)
     if q is None:
         q = asyncio.Queue(maxsize=200)
         JOB_QUEUES[job_id] = q
     return q
+
+
+def subscribe_queue(job_id: str) -> Optional[asyncio.Queue[dict[str, Any]]]:
+    """Subscriber-side accessor. Returns the existing queue if the
+    worker is still around to push events; returns None if no queue
+    exists (worker already finished + cleaned up, or never started).
+
+    Subscribers MUST handle the None case by snapshotting the
+    terminal job state and exiting — they should NOT create an
+    orphan queue that no producer will ever write to.
+    """
+    return JOB_QUEUES.get(job_id)
+
+
+def sweep_stale_queues(*, grace_seconds: int = SWEEP_GRACE_SECONDS,
+                        now: Optional[_dt.datetime] = None) -> int:
+    """Belt-and-suspenders sweep: drop queues whose corresponding job
+    has been in a terminal state for longer than `grace_seconds`.
+
+    Defensive against:
+      - Subscribers that bypass `subscribe_queue` and call
+        `get_or_create_queue` directly (legacy code paths)
+      - Worker crashes between writing terminal state and calling
+        `cleanup_job` (cleanup_job is called from a finally block
+        so this should be rare, but the sweep catches it anyway)
+      - Race conditions where a subscriber connects RIGHT as the
+        worker finishes — its queue reference stays alive in the
+        subscriber's coroutine until that coroutine returns; we
+        give the grace period for the coroutine to drain & exit
+
+    Returns: number of queues evicted.
+    """
+    if now is None:
+        now = _dt.datetime.now(_dt.timezone.utc)
+    cutoff = now - _dt.timedelta(seconds=grace_seconds)
+
+    evicted = 0
+    # Snapshot keys so we can mutate dict while iterating
+    for job_id in list(JOB_QUEUES.keys()):
+        job = store.get_job(job_id)
+        if job is None:
+            # Job row vanished from store — definitely stale
+            JOB_QUEUES.pop(job_id, None)
+            JOB_CANCELLATIONS.pop(job_id, None)
+            evicted += 1
+            continue
+
+        state = str(job.get("state") or "")
+        if state not in _TERMINAL_STATES:
+            continue  # worker may still be writing
+
+        # Parse updated_ts — schema uses isoformat with trailing 'Z'
+        ts_raw = str(job.get("updated_ts") or "").rstrip("Z")
+        if not ts_raw:
+            # Terminal state but no timestamp — sweep conservatively
+            JOB_QUEUES.pop(job_id, None)
+            JOB_CANCELLATIONS.pop(job_id, None)
+            evicted += 1
+            continue
+        try:
+            ts = _dt.datetime.fromisoformat(ts_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=_dt.timezone.utc)
+        except ValueError:
+            logger.warning("worker.sweep: unparseable updated_ts=%r for job=%s",
+                            ts_raw, job_id)
+            continue
+
+        if ts < cutoff:
+            JOB_QUEUES.pop(job_id, None)
+            JOB_CANCELLATIONS.pop(job_id, None)
+            evicted += 1
+
+    if evicted:
+        logger.info("worker.sweep: evicted %d stale queue(s) "
+                    "(grace=%ds, remaining=%d)",
+                    evicted, grace_seconds, len(JOB_QUEUES))
+    return evicted
+
+
+async def periodic_sweep_loop(*, interval_seconds: int = 60,
+                               grace_seconds: int = SWEEP_GRACE_SECONDS) -> None:
+    """Long-running coroutine that calls `sweep_stale_queues` every
+    `interval_seconds`. Designed to be spawned via
+    `asyncio.create_task` from the FastAPI lifespan startup hook.
+
+    Exits gracefully on CancelledError (lifespan shutdown).
+    """
+    logger.info("worker.sweep: starting periodic_sweep_loop "
+                "(interval=%ds, grace=%ds)", interval_seconds, grace_seconds)
+    try:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                sweep_stale_queues(grace_seconds=grace_seconds)
+            except Exception as e:  # noqa: BLE001 — never let sweep crash lifespan
+                logger.exception("worker.sweep: tick failed: %s", e)
+    except asyncio.CancelledError:
+        logger.info("worker.sweep: periodic_sweep_loop cancelled (shutdown)")
+        raise
 
 
 def get_or_create_cancellation(job_id: str) -> CancellationToken:

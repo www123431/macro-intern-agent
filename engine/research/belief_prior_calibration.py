@@ -19,8 +19,9 @@ Doctrine
   prior's pseudo-count weighted to remain anchored until enough
   evidence accumulates.
 
-- Minimum samples to override (calibration cutoff): 5 autopsies in
-  family. Below that, belief-1 falls through to its existing
+- Minimum samples to override (calibration cutoff): 3 autopsies in
+  family (lowered from 5 in v19 — see MIN_AUTOPSIES_FOR_OVERRIDE
+  docstring). Below that, belief-1 falls through to its existing
   observation/override/default logic.
 
 - Bias correction: when over_predicted_X count > threshold ratio,
@@ -70,7 +71,22 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 AUTOPSIES_PATH = _REPO_ROOT / "data" / "research" / "autopsies.jsonl"
 
 # Calibration parameters
-MIN_AUTOPSIES_FOR_OVERRIDE = 5    # below this, fall through to belief-1's existing logic
+#
+# Threshold lowered 5 → 3 in v19 (2026-06-28). Empirical study on 101
+# autopsies / 21 families showed:
+#   - 9 / 21 families had N >= 5 (calibrated)
+#   - 12 / 21 families had N <  5 (fell through to FAMILY_PRIOR_OVERRIDES)
+#   - 8 of those 12 small families were 100% RED in their small sample
+#     (REVERSAL, CARRY_FX, SPANNING_RMW, VALUE, INVESTMENT, SIZE, LOW_VOL,
+#     VOL_RISK_PREMIUM) — the prior gave them G=0.12-0.22 when reality
+#     was 0% GREEN
+# Lowering 5 → 3 captures REVERSAL / CARRY_FX / SPANNING_RMW (all 100%
+# RED at N=3 or 4). The Bayesian shrinkage (alpha=3 × DEFAULT_PRIOR.G=0.20
+# = 0.6 pseudo-count of GREEN) at N=3 produces posterior_G ≈ 0.10 — half
+# the override's 0.20 but not zero, so a single anomalous future GREEN
+# would still pull the family back up. Families with N < 3 still fall
+# through to the hand-calibrated overrides.
+MIN_AUTOPSIES_FOR_OVERRIDE = 3    # below this, fall through to belief-1's existing logic
 PRIOR_PSEUDO_COUNT_ALPHA   = 3.0   # match belief-1's _SMOOTHING_ALPHA
 
 

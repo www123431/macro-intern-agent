@@ -139,6 +139,20 @@ _FACTOR_ANALYSIS_PATTERNS = (
     r"\b(2\s*[×x]\s*3|2\s*[×x]\s*2|2\s*[×x]\s*2\s*[×x]\s*2\s*[×x]\s*2)\s+sorts?\b",
     r"\bsurvive\s+(replication|trading\s+costs)\s+at\b",
     r"\baccounting[\-\s]based\s+anomalies\b",
+
+    # v40 (2026-07-01) — cost-robustness / replication-check patterns
+    # WITHOUT the trailing "at". Live burndown 2026-07-01 15:18 UTC
+    # produced 3 ROUTER refusals in a row on claims like:
+    #   "Momentum (UMD) survives trading costs and delivers 5.37%..."
+    #   "Anomalies remain profitable after realistic trading costs..."
+    #   "Jegadeesh-Titman survives replication with NYSE breakpoints..."
+    # These are validation studies of KNOWN factors, not new factor
+    # proposals. Router correctly refuses (no template fits); pre-v40
+    # they still burned quota because classifier said factor_proposal.
+    r"\bsurvives?\s+trading\s+costs?\b",
+    r"\bsurvives?\s+replication\b",
+    r"\bremain(s)?\s+profitable\s+after\b",
+    r"\bnet\s+of\s+realistic\s+trading\s+costs?\b",
 )
 
 # Tag prefixes / created_by markers

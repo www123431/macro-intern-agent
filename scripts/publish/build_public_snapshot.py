@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import os
 import re
 import shutil
+import stat
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +41,19 @@ TEXT_EXTENSIONS = {
     ".json", ".js", ".jsx", ".ts", ".tsx", ".css", ".html",
     ".sh", ".txt", ".cfg", ".ini",
 }
+
+
+def _force_remove(func, path, _exc):
+    """rmtree onerror: clear the read-only bit and retry.
+
+    git marks objects/ and pack/*.idx read-only, so a plain rmtree of a
+    tree containing a repo dies with PermissionError on Windows.
+    """
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except Exception:
+        raise
 
 
 @dataclass
@@ -280,18 +295,27 @@ def main() -> int:
     if not args.dry_run:
         if snapshot_root.exists():
             print(f"[publish] cleaning existing snapshot at {snapshot_root}")
-            # Preserve a .git/ dir if user has initialized one for git mirror
-            git_dir = snapshot_root / ".git"
-            git_backup = None
-            if git_dir.exists():
-                git_backup = snapshot_root.parent / f".__git_backup_{snapshot_root.name}"
-                if git_backup.exists():
-                    shutil.rmtree(git_backup)
-                shutil.move(str(git_dir), str(git_backup))
-            shutil.rmtree(snapshot_root)
-            snapshot_root.mkdir(parents=True)
-            if git_backup is not None:
-                shutil.move(str(git_backup), str(git_dir))
+            # Clear the snapshot IN PLACE, skipping .git/, rather than moving
+            # .git out and back.
+            #
+            # 2026-09-07: the previous implementation shutil.move()d .git to a
+            # sibling backup and moved it back afterwards. On Windows the
+            # move-back fell out of os.rename into copytree+rmtree, and git
+            # marks pack/*.idx read-only, so the rmtree half died with
+            # PermissionError (WinError 5) — leaving a half-copied .git in the
+            # snapshot and the rest stranded in .__git_backup_*. Never moving
+            # the repo removes that failure mode entirely.
+            for child in snapshot_root.iterdir():
+                if child.name == ".git":
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, onerror=_force_remove)
+                else:
+                    try:
+                        child.unlink()
+                    except PermissionError:
+                        child.chmod(stat.S_IWRITE)
+                        child.unlink()
         else:
             snapshot_root.mkdir(parents=True)
 

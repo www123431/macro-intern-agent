@@ -181,6 +181,19 @@ DEFAULT_EXPECTED_HOUR_UTC = 22    # 06:00 SGT = 22:00 prev-day UTC
 DEFAULT_NO_SHOW_GRACE_MIN = 90    # raise if heartbeat is 90 min late
 
 
+def _hb_ge(as_of_value, expected: _dt.date) -> bool:
+    """Return True iff the heartbeat's as_of string is >= expected date.
+    Tolerates unparseable / missing as_of values by returning False —
+    caller should fall through to the ALERT_NO_SHOW path."""
+    if not as_of_value:
+        return False
+    try:
+        as_of_date = _dt.date.fromisoformat(str(as_of_value))
+    except (TypeError, ValueError):
+        return False
+    return as_of_date >= expected
+
+
 def _most_recent_expected_run_date(
     now_utc: _dt.datetime, *, expected_hour_utc: int, grace_min: int,
     trading_days_only: bool,
@@ -266,6 +279,36 @@ def assess_liveness(
 
     expected_hb = heartbeat_for_date(expected)
     if expected_hb is None:
+        # v26 (2026-07-01): before crying ALERT_NO_SHOW, check whether
+        # the latest heartbeat is actually FRESHER than expected — i.e.
+        # the cron ran, just tagged its row with a newer UTC date. This
+        # happens when the cron runs LATE (after UTC midnight): the
+        # writer stamps as_of=today_utc (already advanced past our
+        # UTC-22:00-deadline computation of "expected"). Pre-v26 this
+        # false-alarmed as a MISSING HEARTBEAT even though the system
+        # was running fine — the screenshotted 2026-07-01 case being
+        # the tell. If latest.as_of >= expected AND age_min is inside
+        # the freshness window, promote to WARN_LATE_RUN instead of
+        # ALERT_NO_SHOW.
+        if (latest is not None
+                and age_min is not None
+                and _hb_ge(latest.get("as_of"), expected)):
+            LATE_WINDOW_MIN = 24 * 60      # 24h since last hb still counts
+            if age_min <= LATE_WINDOW_MIN:
+                return {
+                    "verdict":     "WARN_LATE_RUN",
+                    "explanation": (
+                        f"Cron ran late for the {expected.isoformat()} "
+                        f"deadline (last heartbeat was as_of="
+                        f"{latest.get('as_of')}, {age_min} min ago). "
+                        f"Not a no-show — writer stamped the newer UTC "
+                        f"date after the deadline passed."
+                    ),
+                    "as_of":      expected.isoformat(),
+                    "checked_at": now_utc.isoformat(),
+                    "latest":     latest,
+                    "age_min":    age_min,
+                }
         return {
             "verdict":     "ALERT_NO_SHOW",
             "explanation": (

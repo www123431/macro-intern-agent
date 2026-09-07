@@ -48,7 +48,14 @@ _MAX_RETRIES = 4
 
 
 def _get_api_key() -> str:
-    """Read DEEPSEEK_API_KEY from streamlit secrets (flat) or env."""
+    """Read DEEPSEEK_API_KEY from streamlit secrets (flat), env, or the
+    secrets.toml file directly.
+
+    The direct-file fallback exists because cron interpreters (Task
+    Scheduler → Python310) have neither `streamlit` nor `toml` installed —
+    discovered 2026-08-09 when every autopilot pre-compute DA call
+    silently fail-opened with "API key not found" despite a populated
+    .streamlit/secrets.toml."""
     try:
         import streamlit as st
         key = st.secrets.get("DEEPSEEK_API_KEY", "")
@@ -62,7 +69,37 @@ def _get_api_key() -> str:
                 return key
     except Exception:
         pass
-    return os.environ.get("DEEPSEEK_API_KEY", "")
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if key:
+        return key
+    return _read_key_from_secrets_file()
+
+
+def _read_key_from_secrets_file() -> str:
+    """Parse .streamlit/secrets.toml without third-party deps.
+
+    Tries stdlib tomllib (3.11+) first; falls back to a regex scan for
+    the flat `DEEPSEEK_API_KEY = "..."` line (the shape this repo uses)."""
+    from pathlib import Path
+    secrets_path = (Path(__file__).resolve().parents[3]
+                    / ".streamlit" / "secrets.toml")
+    if not secrets_path.is_file():
+        return ""
+    try:
+        import tomllib
+        with open(secrets_path, "rb") as f:
+            data = tomllib.load(f)
+        return (data.get("DEEPSEEK_API_KEY", "")
+                or data.get("DEEPSEEK", {}).get("API_KEY", ""))
+    except Exception:
+        pass
+    try:
+        import re
+        text = secrets_path.read_text(encoding="utf-8")
+        m = re.search(r'^DEEPSEEK_API_KEY\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

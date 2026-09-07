@@ -38,7 +38,19 @@ def main() -> int:
                      help="Bypass compose cache (re-materialize returns)")
     ap.add_argument("--force-da", action="store_true",
                      help="Fire Devil's Advocate even on RED verdicts (smoke test only)")
+    ap.add_argument("--skip-if-done", action="store_true",
+                     help="Exit 0 without running if today's (UTC) live run "
+                          "already produced data/autopilot/_live/<date>.json. "
+                          "Cron idempotence guard — manual runs omit this.")
     args = ap.parse_args()
+
+    if args.skip_if_done:
+        import datetime as _dt
+        today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+        sentinel = REPO_ROOT / "data" / "autopilot" / "_live" / f"{today}.json"
+        if sentinel.is_file():
+            print(f"SKIP: live run already done today (UTC) — {sentinel}")
+            return 0
 
     from engine.agents.autopilot_live import run_top1
 

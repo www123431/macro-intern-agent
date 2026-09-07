@@ -61,6 +61,52 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 HYPOTHESES_PATH = _REPO_ROOT / "data" / "research_store" / "hypotheses.jsonl"
 DEFAULT_DISPATCH_LOG = _REPO_ROOT / "data" / "strengthener" / "factor_dispatch_log.jsonl"
 DEFAULT_GAPS_PATH = _REPO_ROOT / "data" / "research" / "capability_gaps.jsonl"
+DEFAULT_SPECS_PATH = _REPO_ROOT / "data" / "research_store" / "hypothesis_specs.jsonl"
+
+# v38 (2026-07-01): substrate-alignment score multiplier. Asset classes
+# we have data connectors for get 1.0; cross-asset stuff we don't have
+# gets 0.3 (soft penalty, not zero — still let them occasionally
+# dispatch so capability_gaps demand ledger keeps growing).
+#
+# Empirical basis: today's audit found 85 untested EQUITY specs sitting
+# idle in the queue while 4 COMBINED (cross-asset carry) specs ate the
+# daily LLM budget refusing with SIGNAL_INPUT_UNKNOWN. Every dispatched
+# COMBINED spec is a burned quota slot that could have gone to a
+# testable US-equity claim.
+#
+# Dispatchable = has a working template + data cache in the whitelist:
+#   EQUITY    — cross_sec_us_equities (CRSP + Compustat + FF), event_drift
+#   OPTIONS   — vrp_spx (cboe.vix_spx + optionmetrics)
+#   RATES     — treasury.constant_maturity + move + tlt (some templates)
+#   COMMODITY — futures.settle (cmdty_settle.parquet 2000-2026, v41)
+# Not dispatchable today (still 0.3):
+#   COMBINED   — cross-asset carry / TSMOM often mixes fx.forward.* (no data)
+#   FX         — most templates need fx.forward.* (only fx.spot in cache)
+# COMBINED stays penalized because most COMBINED specs mix multiple
+# asset classes; when v43 adds fx.forward COMBINED can be promoted.
+_SUBSTRATE_DISPATCHABLE_ASSET_CLASSES: frozenset[str] = frozenset({
+    "EQUITY",
+    "OPTIONS",
+    "RATES",
+    "COMMODITY",     # v41 (2026-07-02): cmdty_settle now wired
+    "",              # no asset_class field = pre-schema-v2, allow
+})
+_SUBSTRATE_PENALTY_MISALIGNED = 0.3
+_SUBSTRATE_SCORE_UNKNOWN      = 0.7   # LLM marked UNKNOWN — neutral
+
+# v39 (2026-07-01): paper-level diversity cap. Papers often produce 2-4
+# minor claim variants during synthesis (same paper, slightly different
+# framing) → same source_paper_id, similar recency/family/novelty →
+# adjacent slots on the sorted ranker output. Live audit 2026-07-01
+# showed the top 3 MOMENTUM slots had identical rank_score 0.1957 —
+# almost certainly the same paper's near-clones. Dispatching all 3
+# burns 3 slots for 1 information signal (all GREEN or all RED with
+# high correlation).
+#
+# Default cap of 2: allows small variation on genuinely-different-flavor
+# variants (same paper, e.g. "12-1 momentum" vs "6-1 momentum" — both
+# real ideas) while blocking 3+ near-clones. Set None to disable.
+_DEFAULT_MAX_PER_PAPER = 2
 
 # review states that are eligible for cron dispatch
 ELIGIBLE_REVIEW_STATES = frozenset({
@@ -132,7 +178,17 @@ class RankedCandidate:
     novelty_score:      float
     demand_score:       float
     recency_score:      float
-    rank_score:         float      # product of the three
+    # v22: 0.5 if the family is in the dying set (all-RED autopsies with
+    # N below belief-4's calibration threshold), else 1.0. Default 1.0
+    # for back-compat with tests that construct RankedCandidate directly.
+    dying_penalty_score: float = 1.0
+    # v38: 1.0 if spec's signal_inputs are fully within the dispatcher's
+    # PIT_CORRECT_SOURCES whitelist (CRSP + FF + FRED + etc — data we
+    # actually have); 0.3 if any input is out-of-substrate (cross-asset
+    # futures/fx-forward — will refuse at gate 8); 0.7 if no spec yet
+    # (unknown). Default 1.0 for back-compat with hand-built tests.
+    substrate_score:    float = 1.0
+    rank_score:         float = 0.0    # product of all five scores
 
     def to_dict(self) -> dict:
         return _dc.asdict(self)
@@ -221,6 +277,54 @@ def _recency_score(created_ts: str, now: _dt.datetime) -> float:
     return 1.0 / (1.0 + age_days / 30.0)
 
 
+def load_asset_class_by_hyp_id(
+    specs_path: Optional[Path] = None,
+) -> dict[str, str]:
+    """Return {hypothesis_id: asset_class} from the latest spec version
+    per hypothesis. Missing hypothesis → not in dict (caller treats as
+    unknown-neutral substrate score).
+
+    Reads hypothesis_specs.jsonl once. Latest version wins per hid.
+    """
+    path = specs_path or DEFAULT_SPECS_PATH
+    latest_ver_by_hid: dict[str, int] = {}
+    ac_by_hid: dict[str, str] = {}
+    for row in _iter_jsonl(path):
+        hid = row.get("source_hypothesis_id")
+        if not hid:
+            continue
+        ver = int(row.get("version", 0))
+        prior_ver = latest_ver_by_hid.get(hid, -1)
+        if ver <= prior_ver:
+            continue
+        ac = ((row.get("universe") or {}).get("asset_class") or "")
+        latest_ver_by_hid[hid] = ver
+        ac_by_hid[hid] = ac
+    return ac_by_hid
+
+
+def _substrate_alignment_score(
+    asset_class: Optional[str],
+    dispatchable: frozenset[str],
+) -> float:
+    """v38: score how well a spec's asset_class aligns with data
+    connectors we actually have.
+
+    Returns:
+      1.0  — dispatchable asset class (EQUITY / OPTIONS / RATES / empty)
+      0.7  — asset_class = UNKNOWN (LLM couldn't tell; neutral)
+      0.3  — cross-asset / commodity / FX-forward (will refuse gate 8)
+    """
+    if asset_class is None:
+        return _SUBSTRATE_SCORE_UNKNOWN
+    ac = asset_class.upper()
+    if ac == "UNKNOWN":
+        return _SUBSTRATE_SCORE_UNKNOWN
+    if ac in dispatchable:
+        return 1.0
+    return _SUBSTRATE_PENALTY_MISALIGNED
+
+
 def _compute_age_days(created_ts: str, now: _dt.datetime) -> int:
     if not created_ts:
         return -1
@@ -242,8 +346,10 @@ def rank_candidates(
     hyp_path:           Optional[Path] = None,
     dispatch_log_path:  Optional[Path] = None,
     gaps_path:          Optional[Path] = None,
+    specs_path:         Optional[Path] = None,
     now:                Optional[_dt.datetime] = None,
     usage:              Optional["object"] = None,    # WeeklyUsage if provided
+    max_per_paper:      Optional[int] = _DEFAULT_MAX_PER_PAPER,
 ) -> list[RankedCandidate]:
     """Rank the top_k eligible hypotheses.
 
@@ -258,6 +364,15 @@ def rank_candidates(
     hypotheses = load_hypotheses(hyp_path)
     dispatched = load_dispatched_hypothesis_ids(dispatch_log_path)
     demand_families = load_demand_families(gaps_path)
+    # v22 (2026-06-28): de-prioritize hypotheses in mechanism families
+    # where all recent autopsies were RED — see engine.research.dying_families.
+    # Never a hard block; principal / /approvals can still promote.
+    from engine.research.dying_families import (
+        load_dying_families, dying_family_penalty,
+    )
+    dying_families = load_dying_families()
+    # v38: substrate alignment — spec.universe.asset_class vs dispatchable set
+    asset_class_by_hid = load_asset_class_by_hyp_id(specs_path)
 
     # Cap accounting (optional). If usage is None we just rank without
     # capacity filter; if provided we filter and track per-family
@@ -315,20 +430,32 @@ def rank_candidates(
         novelty = _novelty_score(family)
         demand  = _demand_score(family, demand_families)
         recency = _recency_score(h.get("created_ts") or "", now)
-        rank    = novelty * demand * recency
+        # v22: dying family multiplier — 0.5 if family flagged, 1.0 otherwise
+        dying   = dying_family_penalty(family, dying_families)
+        # v38: substrate alignment — spec's asset_class vs data we have.
+        # Cross-asset (COMBINED, COMMODITY, FX) will refuse at gate 8
+        # with SIGNAL_INPUT_UNKNOWN; demoted to 0.3 so EQUITY/OPTIONS/
+        # RATES float to the top when both are available.
+        substrate = _substrate_alignment_score(
+            asset_class_by_hid.get(hid),
+            _SUBSTRATE_DISPATCHABLE_ASSET_CLASSES,
+        )
+        rank    = novelty * demand * recency * dying * substrate
 
         candidates.append(RankedCandidate(
-            hypothesis_id     = hid,
-            family            = family,
-            claim_short       = (h.get("claim") or "")[:200],
-            mechanism_subtype = h.get("mechanism_subtype"),
-            created_ts        = h.get("created_ts") or "",
-            age_days          = _compute_age_days(h.get("created_ts") or "", now),
-            source_paper_id   = h.get("source_paper_id"),
-            novelty_score     = novelty,
-            demand_score      = demand,
-            recency_score     = recency,
-            rank_score        = rank,
+            hypothesis_id       = hid,
+            family              = family,
+            claim_short         = (h.get("claim") or "")[:200],
+            mechanism_subtype   = h.get("mechanism_subtype"),
+            created_ts          = h.get("created_ts") or "",
+            age_days            = _compute_age_days(h.get("created_ts") or "", now),
+            source_paper_id     = h.get("source_paper_id"),
+            novelty_score       = novelty,
+            demand_score        = demand,
+            recency_score       = recency,
+            dying_penalty_score = dying,
+            substrate_score     = substrate,
+            rank_score          = rank,
         ))
 
     # Sort descending by rank; deterministic tie-break by hypothesis_id
@@ -337,8 +464,11 @@ def rank_candidates(
     if usage is None:
         return candidates[:top_k]
 
-    # Filter by family + global capacity, walking the sorted list
+    # Filter by family + global capacity, walking the sorted list.
+    # v39: also cap per-source_paper_id to prevent 3+ near-clones of the
+    # same paper eating adjacent slots (top-3 identical-score problem).
     selected: list[RankedCandidate] = []
+    paper_seen: dict[str, int] = {}
     for c in candidates:
         if len(selected) >= top_k:
             break
@@ -347,7 +477,15 @@ def rank_candidates(
         fam_left = capacity_left_by_family.get(c.family, None)
         if fam_left is not None and fam_left <= 0:
             continue
+        # v39 paper diversity: None/empty paper_id = each is its own group
+        # (avoid clustering pre-schema-v2 no-paper hypotheses into one bucket).
+        pid = c.source_paper_id or ""
+        if max_per_paper is not None and pid:
+            if paper_seen.get(pid, 0) >= max_per_paper:
+                continue
         selected.append(c)
+        if pid:
+            paper_seen[pid] = paper_seen.get(pid, 0) + 1
         if fam_left is not None:
             capacity_left_by_family[c.family] = fam_left - 1
         if global_room is not None:

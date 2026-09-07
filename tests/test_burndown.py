@@ -389,6 +389,152 @@ def test_ranker_recency_ordering(tmp_path):
     assert out[0].rank_score > out[1].rank_score
 
 
+def test_ranker_v38_substrate_alignment_promotes_equity(tmp_path):
+    """v38 regression: given two same-family, same-recency hypotheses
+    where one has an EQUITY spec and the other has a COMBINED
+    (cross-asset) spec, the EQUITY one must rank higher because we
+    can actually dispatch it (COMBINED will refuse at gate 8 with
+    SIGNAL_INPUT_UNKNOWN, wasting the daily budget slot).
+
+    This is the 2026-07-01 pain point: 85 untested EQUITY specs sat
+    idle in the queue while the ranker preferred fresh CARRY specs
+    that then all refused."""
+    hyp = _write_hypotheses(tmp_path, [
+        _hyp(hid="h-equity",   family="MOMENTUM", days_ago=1),
+        _hyp(hid="h-combined", family="MOMENTUM", days_ago=1),
+    ])
+    gaps = tmp_path / "gaps.jsonl"; gaps.touch()
+    log  = tmp_path / "dispatch_log.jsonl"; log.touch()
+    specs = tmp_path / "hypothesis_specs.jsonl"
+    specs.write_text(
+        json.dumps({
+            "source_hypothesis_id": "h-equity",
+            "version": 1,
+            "universe": {"asset_class": "EQUITY"},
+        }) + "\n" +
+        json.dumps({
+            "source_hypothesis_id": "h-combined",
+            "version": 1,
+            "universe": {"asset_class": "COMBINED"},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    out = burndown_ranker.rank_candidates(
+        top_k=2, hyp_path=hyp, dispatch_log_path=log, gaps_path=gaps,
+        specs_path=specs,
+        now=_dt.datetime(2026, 6, 11, 12, 0, tzinfo=_dt.timezone.utc),
+    )
+    assert [c.hypothesis_id for c in out] == ["h-equity", "h-combined"]
+    # EQUITY substrate=1.0; COMBINED=0.3 → equity rank must be ~3.3x
+    equity = next(c for c in out if c.hypothesis_id == "h-equity")
+    combined = next(c for c in out if c.hypothesis_id == "h-combined")
+    assert equity.substrate_score == 1.0
+    assert combined.substrate_score == 0.3
+    assert equity.rank_score > combined.rank_score * 2.5
+
+
+def test_ranker_v39_paper_diversity_caps_clones(tmp_path, monkeypatch):
+    """v39 regression: 3 hypotheses from the same source_paper_id with
+    near-identical rank scores must not eat 3 adjacent cron slots.
+    Cap at 2 prevents "same paper, 3 clones" from dominating.
+
+    This is the 2026-07-01 pain point: top-3 MOMENTUM slots all had
+    rank_score 0.1957 — same paper's minor variants. Dispatching all
+    3 burns 3 quota for 1 information signal (highly correlated
+    outcomes)."""
+    hyp = _write_hypotheses(tmp_path, [
+        # 3 clones from paper A
+        {**_hyp(hid="h-a1", family="MOMENTUM"), "source_paper_id": "paperA"},
+        {**_hyp(hid="h-a2", family="MOMENTUM"), "source_paper_id": "paperA"},
+        {**_hyp(hid="h-a3", family="MOMENTUM"), "source_paper_id": "paperA"},
+        # 1 unrelated hypothesis from paper B — must NOT be blocked
+        {**_hyp(hid="h-b1", family="MOMENTUM"), "source_paper_id": "paperB"},
+    ])
+    gaps = tmp_path / "gaps.jsonl"; gaps.touch()
+    log  = tmp_path / "dispatch_log.jsonl"; log.touch()
+
+    # Use a WeeklyUsage stub so the capacity-filter path runs (cap only
+    # applies in that path).
+    class _Usage: pass
+    from engine.research import burndown_caps
+    monkeypatch.setattr(burndown_caps, "global_hard_cap_breached",
+                          lambda u: False)
+    monkeypatch.setattr(burndown_caps, "global_capacity_left",
+                          lambda u: 10)
+    monkeypatch.setattr(burndown_caps, "family_capacity_left",
+                          lambda f, u: 10)
+    monkeypatch.setattr(burndown_caps, "WATCHED_FAMILIES", {"MOMENTUM"})
+
+    out = burndown_ranker.rank_candidates(
+        top_k=10, hyp_path=hyp, dispatch_log_path=log, gaps_path=gaps,
+        now=_dt.datetime(2026, 6, 11, 12, 0, tzinfo=_dt.timezone.utc),
+        usage=_Usage(), max_per_paper=2,
+    )
+    ids = [c.hypothesis_id for c in out]
+    # Exactly 2 from paperA + 1 from paperB = 3 total (3rd paperA clone blocked)
+    paper_a_selected = sum(1 for c in out if c.source_paper_id == "paperA")
+    paper_b_selected = sum(1 for c in out if c.source_paper_id == "paperB")
+    assert paper_a_selected == 2, f"Expected 2 from paperA, got {paper_a_selected}: {ids}"
+    assert paper_b_selected == 1, f"paperB unrelated must pass; got {paper_b_selected}"
+
+
+def test_ranker_v39_no_paper_id_never_clusters(tmp_path, monkeypatch):
+    """v39 defensive: legacy hypotheses without source_paper_id must
+    NOT be pooled into a single 'None' bucket that gets capped.
+    Each None-paper hypothesis is its own group."""
+    hyp = _write_hypotheses(tmp_path, [
+        _hyp(hid="h-x"),
+        _hyp(hid="h-y"),
+        _hyp(hid="h-z"),   # all three with no source_paper_id
+    ])
+    gaps = tmp_path / "gaps.jsonl"; gaps.touch()
+    log  = tmp_path / "dispatch_log.jsonl"; log.touch()
+
+    class _Usage: pass
+    from engine.research import burndown_caps
+    monkeypatch.setattr(burndown_caps, "global_hard_cap_breached", lambda u: False)
+    monkeypatch.setattr(burndown_caps, "global_capacity_left", lambda u: 10)
+    monkeypatch.setattr(burndown_caps, "family_capacity_left", lambda f, u: 10)
+    monkeypatch.setattr(burndown_caps, "WATCHED_FAMILIES", {"PROFITABILITY"})
+
+    out = burndown_ranker.rank_candidates(
+        top_k=10, hyp_path=hyp, dispatch_log_path=log, gaps_path=gaps,
+        now=_dt.datetime(2026, 6, 11, 12, 0, tzinfo=_dt.timezone.utc),
+        usage=_Usage(), max_per_paper=2,
+    )
+    ids = {c.hypothesis_id for c in out}
+    assert ids == {"h-x", "h-y", "h-z"}, (
+        f"None-paper hypotheses must not cluster; got {ids}"
+    )
+
+
+def test_ranker_v38_substrate_unknown_stays_neutral(tmp_path):
+    """v38: asset_class=UNKNOWN (LLM couldn't classify) gets a neutral
+    0.7 — not full penalty. Keeps the queue moving on ambiguous specs
+    without letting them dominate over confirmed-dispatchable ones."""
+    hyp = _write_hypotheses(tmp_path, [
+        _hyp(hid="h-eq",  family="MOMENTUM", days_ago=1),
+        _hyp(hid="h-unk", family="MOMENTUM", days_ago=1),
+    ])
+    gaps = tmp_path / "gaps.jsonl"; gaps.touch()
+    log  = tmp_path / "dispatch_log.jsonl"; log.touch()
+    specs = tmp_path / "hypothesis_specs.jsonl"
+    specs.write_text(
+        json.dumps({"source_hypothesis_id": "h-eq",  "version": 1,
+                     "universe": {"asset_class": "EQUITY"}}) + "\n" +
+        json.dumps({"source_hypothesis_id": "h-unk", "version": 1,
+                     "universe": {"asset_class": "UNKNOWN"}}) + "\n",
+        encoding="utf-8",
+    )
+    out = burndown_ranker.rank_candidates(
+        top_k=2, hyp_path=hyp, dispatch_log_path=log, gaps_path=gaps,
+        specs_path=specs,
+        now=_dt.datetime(2026, 6, 11, 12, 0, tzinfo=_dt.timezone.utc),
+    )
+    unk = next(c for c in out if c.hypothesis_id == "h-unk")
+    assert unk.substrate_score == 0.7
+
+
 # ── Planner ───────────────────────────────────────────────────────
 
 

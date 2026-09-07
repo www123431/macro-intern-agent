@@ -3185,6 +3185,54 @@ def rule_max_position_weight_vs_cap() -> RuleResult:
     }
 
 
+_KNOWN_CADENCE_GAPS_PATH = "data/ops_watchdog/known_cadence_gaps.json"
+
+
+def _load_known_cadence_gaps() -> Dict[str, Dict[str, Any]]:
+    """Months whose missing rebalance has been triaged, explained and fixed.
+
+    Deliberately NOT a general watchdog waiver mechanism — it is scoped to
+    mode 11 alone. It exists because a cadence miss is an irreversible
+    historical fact: once a month passes without a rebalance, no later fix
+    can retro-create it, so the finding would re-latch the circuit breaker
+    for the full 6-month audit window even after the underlying bug is gone.
+
+    Every entry MUST carry a non-empty `reason`; entries without one are
+    ignored (loudly) so a waiver can never be filed without a rationale.
+    Fail-safe: a missing or malformed file waives nothing.
+
+    Schema: [{"month": "YYYY-MM", "reason": str, "fixed_by": str}]
+    """
+    import json
+    import pathlib
+
+    path = pathlib.Path(_KNOWN_CADENCE_GAPS_PATH)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("known_cadence_gaps: unreadable (%s) — waiving nothing", exc)
+        return {}
+    if not isinstance(raw, list):
+        logger.warning("known_cadence_gaps: expected a list, got %s — waiving nothing",
+                       type(raw).__name__)
+        return {}
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        month = entry.get("month")
+        reason = (entry.get("reason") or "").strip()
+        if not month or not reason:
+            logger.warning("known_cadence_gaps: dropping entry without month+reason: %r",
+                           entry)
+            continue
+        out[str(month)] = entry
+    return out
+
+
 def rule_rebalance_frequency_audit() -> RuleResult:
     """
     Watchdog mode 11 — Rebalance cadence drift.
@@ -3261,6 +3309,50 @@ def rule_rebalance_frequency_audit() -> RuleResult:
         else:
             cur = cur.replace(month=cur.month + 1)
 
+    # Months in which the batch never completed a single daily cycle. The
+    # system was down, so "no rebalance" is an outage footprint, not the
+    # config bug this mode is scored SEVERE for. Same principle as the
+    # PRODUCTION_TRADING_START floor above: do not let an interval the
+    # pipeline could not act in produce a halt-worthy finding. Without this
+    # the halt is self-sustaining — the outage creates the violation, the
+    # violation latches the circuit breaker, and the breaker blocks the
+    # cycles that would clear it (2026-09-07 triage).
+    # A month is only excused on POSITIVE evidence of an outage: it has
+    # CycleState rows and not one of them reached a terminal-OK status. The
+    # absence of rows is NOT evidence — a fresh or partially-populated DB
+    # would otherwise excuse every month and silently disable this rule.
+    # When in doubt, audit.
+    halted_months: set[str] = set()
+    try:
+        from engine.db_models import CycleState
+
+        _TERMINAL_OK = {"completed", "approved", "pending_gate", "rejected"}
+        with SessionFactory() as s:
+            cyc = (s.query(CycleState.as_of_date, CycleState.status)
+                    .filter(CycleState.cycle_type == "daily",
+                            CycleState.as_of_date >= start,
+                            CycleState.as_of_date < first_of_month)
+                    .all())
+        seen_months: set[str] = set()
+        ok_months: set[str] = set()
+        for d, status in cyc:
+            if not d:
+                continue
+            ym = f"{d.year:04d}-{d.month:02d}"
+            seen_months.add(ym)
+            if status in _TERMINAL_OK:
+                ok_months.add(ym)
+        halted_months = {ym for ym in months if ym in seen_months and ym not in ok_months}
+    except Exception as exc:
+        # Never let this degrade into a silent pass — if we cannot tell which
+        # months were halted, audit every month as before.
+        logger.warning("rule_rebalance_frequency_audit: halted-month check "
+                       "failed, auditing all months: %s", exc)
+        halted_months = set()
+
+    known_gaps = _load_known_cadence_gaps()
+    waived_months: List[str] = []
+
     violations: List[Dict[str, Any]] = []
     for ym in months:
         dates = by_month.get(ym, [])
@@ -3270,6 +3362,11 @@ def rule_rebalance_frequency_audit() -> RuleResult:
             day_counts[d] += 1
         bulk_days = sorted(d for d, c in day_counts.items() if c >= 3)
         if len(bulk_days) == 0:
+            if ym in halted_months:
+                continue
+            if ym in known_gaps:
+                waived_months.append(ym)
+                continue
             violations.append({
                 "month":       ym,
                 "kind":        "no_rebalance",
@@ -3289,10 +3386,13 @@ def rule_rebalance_frequency_audit() -> RuleResult:
     return {
         "severity": "HIGH",
         "snapshot": {
-            "months_inspected": months,
-            "n_violations":     len(violations),
-            "violations":       violations,
-            "context":          "Ops Watchdog mode 11 — rebalance cadence drift.",
+            "months_inspected":      months,
+            "months_skipped_halted": sorted(halted_months),
+            "months_waived_known":   sorted(waived_months),
+            "waivers":               [known_gaps[m] for m in sorted(waived_months)],
+            "n_violations":          len(violations),
+            "violations":            violations,
+            "context":               "Ops Watchdog mode 11 — rebalance cadence drift.",
         },
     }
 
@@ -4484,6 +4584,259 @@ def rule_etf_cap_state_consistency_with_book() -> RuleResult:
     }
 
 
+def rule_events_integrity_drift() -> RuleResult:
+    """v25 (2026-06-28): alert when research_store events.jsonl integrity
+    drifts from the v24 baseline. Reads the daily integrity_report.json
+    produced by scripts/reports/report_events_integrity.py; compares each
+    category count against data/research_store/integrity_baseline.json.
+
+    Severity map (per CLAUDE.md event-emission doctrine):
+      HIGH — NEW duplicate_event_id (should never happen — UUIDs unique)
+      HIGH — NEW evidence_doc_file_missing (files vanished from disk)
+      MID  — missing_evidence_doc COUNT increased (new emit skipping v15
+             contract, OR shadow_emit bypass without opt-out reason)
+      MID  — broken_parent_ref COUNT increased (lineage chain broken by
+             a newer emit)
+      LOW  — unregistered_subject COUNT increased (subject emitted
+             without being added to subjects.yaml)
+      LOW  — baseline file missing (fresh install / first run — seeds
+             from current report, no alert)
+
+    Baseline update policy:
+      - Counts DECREASING is celebrated (someone fixed things); the
+        rule automatically shrinks the baseline to match — future
+        drift will be measured against the new lower floor.
+      - Counts INCREASING trigger the alert. The baseline is NOT
+        auto-bumped up; a human needs to acknowledge + accept new
+        legacy issues by manually editing integrity_baseline.json.
+    """
+    import datetime as _dt
+    from pathlib import Path
+    _REPO_ROOT = Path(__file__).resolve().parents[1]
+    report_path   = _REPO_ROOT / "data" / "research_store" / "integrity_report.json"
+    baseline_path = _REPO_ROOT / "data" / "research_store" / "integrity_baseline.json"
+
+    if not report_path.is_file():
+        return {"severity": "LOW",
+                 "snapshot": {"kind": "integrity_report_missing",
+                                "path": str(report_path),
+                                "hint":  "expected daily_belief_refresh cron to write it "
+                                          "via report_events_integrity.py"}}
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"severity": "LOW",
+                 "snapshot": {"kind": "integrity_report_unreadable",
+                                "error": f"{type(exc).__name__}: {exc}"}}
+
+    current: Dict[str, int] = dict(report.get("by_category") or {})
+
+    # Seed baseline on first run
+    if not baseline_path.is_file():
+        baseline_path.write_text(
+            json.dumps({"by_category": current,
+                          "seeded_at_iso": _dt.datetime.utcnow().replace(
+                              tzinfo=_dt.timezone.utc,
+                          ).isoformat(),
+                          "note": ("Baseline snapshot for v25 events_integrity "
+                                    "drift check. Edit + commit to acknowledge "
+                                    "accepted legacy counts.")},
+                          indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return {"severity": "LOW",
+                 "snapshot": {"kind":  "baseline_seeded",
+                                "seeded_categories": list(current.keys()),
+                                "counts": current}}
+
+    try:
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"severity": "LOW",
+                 "snapshot": {"kind": "baseline_unreadable",
+                                "error": f"{type(exc).__name__}: {exc}"}}
+
+    baseline_counts: Dict[str, int] = dict(baseline.get("by_category") or {})
+
+    # Compare
+    increases: Dict[str, Dict[str, int]] = {}
+    decreases: Dict[str, Dict[str, int]] = {}
+    new_categories: list[str] = []
+    for cat, cur_n in current.items():
+        base_n = int(baseline_counts.get(cat, 0))
+        if cat not in baseline_counts:
+            new_categories.append(cat)
+            if cur_n > 0:
+                increases[cat] = {"baseline": 0, "current": cur_n,
+                                     "delta": cur_n}
+            continue
+        if cur_n > base_n:
+            increases[cat] = {"baseline": base_n, "current": cur_n,
+                                 "delta": cur_n - base_n}
+        elif cur_n < base_n:
+            decreases[cat] = {"baseline": base_n, "current": cur_n,
+                                 "delta": base_n - cur_n}
+
+    # Decreases → shrink baseline automatically (someone fixed things)
+    if decreases:
+        for cat, meta in decreases.items():
+            baseline_counts[cat] = meta["current"]
+        baseline["by_category"] = baseline_counts
+        baseline["last_shrunk_iso"] = _dt.datetime.utcnow().replace(
+            tzinfo=_dt.timezone.utc,
+        ).isoformat()
+        baseline_path.write_text(
+            json.dumps(baseline, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    if not increases:
+        return None    # clean — no finding
+
+    # Severity map
+    high_categories = {"duplicate_event_id", "evidence_doc_file_missing"}
+    mid_categories  = {"missing_evidence_doc", "broken_parent_ref"}
+    hit_high = any(c in high_categories for c in increases)
+    hit_mid  = any(c in mid_categories  for c in increases)
+    severity = "HIGH" if hit_high else ("MID" if hit_mid else "LOW")
+
+    return {
+        "severity": severity,
+        "snapshot": {
+            "kind":            "events_integrity_drift",
+            "n_events":        report.get("n_events"),
+            "increases":       increases,
+            "decreases":       decreases,   # for audit trail
+            "new_categories":  new_categories,
+            "current_totals":  current,
+            "baseline_totals": baseline_counts,
+            "context": (
+                "research_store events.jsonl accumulated NEW integrity "
+                "issues since the last committed baseline. See "
+                "data/research_store/integrity_report.md for offending "
+                "event_ids + fix hints."
+            ),
+            "fix_hint": (
+                "1) Investigate offending events (integrity_report.md "
+                "lists samples per category). 2) If the new counts are "
+                "acceptable legacy, edit data/research_store/"
+                "integrity_baseline.json to bump the accepted floor + "
+                "commit. 3) If they're real regressions (e.g. a new emit "
+                "path bypassing v15 evidence_doc contract), fix the "
+                "producer + rerun."
+            ),
+        },
+    }
+
+
+def rule_stuck_severe_circuit_breaker() -> RuleResult:
+    """v29 (2026-07-01): alert when circuit_breaker has been SEVERE
+    for longer than a plausible on-call response window.
+
+    The 2026-06-17 → 2026-07-01 incident showed the failure mode: a
+    real halt fired, but the laptop went offline for 14 days, no
+    fresh cron pressure could auto-clear, and no one was watching.
+    v26 discovered the stuck state through UI screenshots — this
+    rule ensures next-day discovery even when the UI isn't opened.
+
+    Uses v28's cb_reset_events.jsonl audit ledger to distinguish
+    "just triggered" from "long-stale" — computes age as (now -
+    max(cb.triggered_at, last_reset_at)).
+
+    Severity ladder:
+      LOW    — CB severe, age <= 24h (still within a reasonable
+               response window for a legit halt)
+      MID    — CB severe, 24h < age <= 3 days (looking forgotten)
+      HIGH   — CB severe, age > 3 days (definitely forgotten;
+               matches the v26 timeline where 14 days elapsed
+               without action)
+
+    Not-severe states return None (no finding).
+    """
+    import datetime as _dt
+
+    try:
+        from engine.circuit_breaker import get_status, latest_reset_at
+    except Exception as exc:
+        return {"severity": "LOW",
+                 "snapshot": {"kind": "circuit_breaker_module_missing",
+                                "reason": str(exc)}}
+
+    try:
+        state = get_status()
+    except Exception as exc:
+        return {"severity": "LOW",
+                 "snapshot": {"kind": "circuit_breaker_probe_failed",
+                                "reason": str(exc)}}
+
+    level = getattr(state, "level", "none") or "none"
+    if level != "severe":
+        return None  # clean — no finding
+
+    now = _dt.datetime.utcnow().replace(tzinfo=_dt.timezone.utc)
+    triggered_at_raw = getattr(state, "triggered_at", None)
+    reset_at_raw     = latest_reset_at()
+
+    def _parse_iso(s):
+        if not s:
+            return None
+        try:
+            return _dt.datetime.fromisoformat(str(s).rstrip("Z"))
+        except (TypeError, ValueError):
+            return None
+
+    triggered = _parse_iso(triggered_at_raw)
+    reset     = _parse_iso(reset_at_raw)
+
+    if triggered is not None and triggered.tzinfo is None:
+        triggered = triggered.replace(tzinfo=_dt.timezone.utc)
+    if reset is not None and reset.tzinfo is None:
+        reset = reset.replace(tzinfo=_dt.timezone.utc)
+
+    # The clock starts at max(triggered, last reset). If there was
+    # a reset AFTER the current triggered_at, the current SEVERE is
+    # brand new (someone reset, then it re-triggered).
+    if triggered and reset:
+        clock_start = max(triggered, reset)
+    else:
+        clock_start = triggered or reset or now
+
+    age_hours = max(0.0, (now - clock_start).total_seconds() / 3600.0)
+
+    if age_hours <= 24:
+        severity = "LOW"
+    elif age_hours <= 72:
+        severity = "MID"
+    else:
+        severity = "HIGH"
+
+    return {
+        "severity": severity,
+        "snapshot": {
+            "kind":             "stuck_severe_circuit_breaker",
+            "level":            level,
+            "age_hours":        round(age_hours, 1),
+            "triggered_at":     triggered_at_raw,
+            "last_reset_at":    reset_at_raw,
+            "reason":           getattr(state, "reason", "") or "",
+            "context": (
+                f"Circuit breaker has been SEVERE for {age_hours:.1f}h "
+                f"({age_hours/24:.1f} days). Real halts should be triaged "
+                f"within 24h; anything past 3 days suggests the on-call "
+                f"channel isn't being read or the laptop was offline."
+            ),
+            "fix_hint": (
+                "1) Investigate the halt reason (state.reason). 2) If "
+                "resolved, run engine.circuit_breaker.manual_reset("
+                "reason=...). 3) If the underlying condition is still "
+                "true, escalate — do NOT reset without fixing the "
+                "root cause."
+            ),
+        },
+    }
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Ops Watchdog Agent v1.0 registry (spec id=63, hash 512c918f)
 #   Separate from CRITICAL_RULES / WEEKLY_RULES. Invoked by Watchdog at
@@ -4512,5 +4865,9 @@ WATCHDOG_RULES: List[RuleFn] = [
     rule_etf_cap_state_consistency_with_book,
     # Phase 1 Agent Observability v1 (2026-05-15) — 5th Tier R rule
     rule_agent_slo_breach,
+    # v25 (2026-06-28) — research_store events.jsonl doctrine drift
+    rule_events_integrity_drift,
+    # v29 (2026-07-01) — CB stuck SEVERE > 24h/3d ladder (uses v28 audit ledger)
+    rule_stuck_severe_circuit_breaker,
 ]
 

@@ -630,6 +630,42 @@ def _seed_bulk_trades(session, year, month, day, n_trades, ticker_prefix="X"):
         ))
 
 
+def _seed_cycles(session, year, month, status, n=1):
+    """Seed daily CycleState rows so the halted-month check has evidence."""
+    from engine.db_models import CycleState
+    for i in range(n):
+        session.add(CycleState(
+            cycle_type="daily",
+            as_of_date=datetime.date(year, month, min(i + 1, 28)),
+            status=status,
+        ))
+
+
+def _month_bounds(year, month):
+    start = datetime.date(year, month, 1)
+    end = (datetime.date(year + 1, 1, 1) if month == 12
+           else datetime.date(year, month + 1, 1))
+    return start, end
+
+
+def _delete_trades_in_month(session, year, month):
+    from engine.db_models import SimulatedTrade
+    start, end = _month_bounds(year, month)
+    (session.query(SimulatedTrade)
+            .filter(SimulatedTrade.trade_date >= start,
+                    SimulatedTrade.trade_date < end)
+            .delete(synchronize_session=False))
+
+
+def _delete_cycles_in_month(session, year, month):
+    from engine.db_models import CycleState
+    start, end = _month_bounds(year, month)
+    (session.query(CycleState)
+            .filter(CycleState.as_of_date >= start,
+                    CycleState.as_of_date < end)
+            .delete(synchronize_session=False))
+
+
 def _last_n_completed_months(n):
     """Return list of (year, month) for last n completed months."""
     today = datetime.date.today()
@@ -644,6 +680,21 @@ def _last_n_completed_months(n):
 
 
 class TestRebalanceFrequencyAudit:
+    @pytest.fixture(autouse=True)
+    def _isolated_waivers(self, monkeypatch, tmp_path):
+        """Point the known-cadence-gap registry at an empty tmp path.
+
+        Without this the production registry (data/ops_watchdog/
+        known_cadence_gaps.json) leaks into these tests: it waives 2026-07,
+        which sits inside the trailing-6-month window for much of late 2026,
+        so tests would silently pass or fail depending on today's date.
+        Tests that want a waiver write this file themselves.
+        """
+        from engine import auto_audit_rules as _r
+        self.waiver_path = tmp_path / "known_cadence_gaps.json"
+        monkeypatch.setattr(_r, "_KNOWN_CADENCE_GAPS_PATH", str(self.waiver_path))
+        return self.waiver_path
+
     def test_clean_one_rebalance_per_month(self, isolated_db):
         from engine.auto_audit_rules import rule_rebalance_frequency_audit
         months = _last_n_completed_months(6)
@@ -713,6 +764,126 @@ class TestRebalanceFrequencyAudit:
             ym_v = v["month"]
             ym_cur = f"{today.year:04d}-{today.month:02d}"
             assert ym_v != ym_cur
+
+    # ── Halted-month exclusion (2026-09-07) ──────────────────────────────
+    # A month the pipeline was down in produces "no rebalance" as an outage
+    # footprint, not the config bug this mode is scored SEVERE for. Left
+    # unexcused it makes the halt self-sustaining: the outage creates the
+    # violation, the violation latches the circuit breaker, and the breaker
+    # blocks the cycles that would clear it.
+
+    def test_month_with_only_failed_cycles_is_excused(self, isolated_db):
+        from engine.auto_audit_rules import rule_rebalance_frequency_audit
+        months = _last_n_completed_months(6)
+        with isolated_db() as s:
+            for (y, m) in months:
+                _seed_bulk_trades(s, y, m, 15, n_trades=5)
+                _seed_cycles(s, y, m, "completed", n=3)
+            # Wipe the most recent completed month: no trades, only failures.
+            (y, m) = months[-1]
+            _delete_trades_in_month(s, y, m)
+            _delete_cycles_in_month(s, y, m)
+            _seed_cycles(s, y, m, "failed", n=5)
+            s.commit()
+        result = rule_rebalance_frequency_audit()
+        ym = f"{months[-1][0]:04d}-{months[-1][1]:02d}"
+        if result is not None:
+            assert ym not in [v["month"] for v in result["snapshot"]["violations"]]
+            assert ym in result["snapshot"]["months_skipped_halted"]
+        # result is None (no violations at all) is equally acceptable.
+
+    def test_month_with_completed_cycles_but_no_rebalance_still_fires(self, isolated_db):
+        """The July 2026 case: the batch ran fine, the rebalance gate was
+        broken. That is exactly the config bug mode 11 exists to catch and
+        must NOT be swallowed by the halted-month exclusion."""
+        from engine.auto_audit_rules import rule_rebalance_frequency_audit
+        months = _last_n_completed_months(6)
+        with isolated_db() as s:
+            for (y, m) in months:
+                _seed_bulk_trades(s, y, m, 15, n_trades=5)
+                _seed_cycles(s, y, m, "completed", n=3)
+            (y, m) = months[-1]
+            _delete_trades_in_month(s, y, m)   # cycles stay 'completed'
+            s.commit()
+        result = rule_rebalance_frequency_audit()
+        ym = f"{y:04d}-{m:02d}"
+        assert result is not None and result["severity"] == "HIGH"
+        assert ym in [v["month"] for v in result["snapshot"]["violations"]]
+        assert ym not in result["snapshot"]["months_skipped_halted"]
+
+    def test_absent_cycle_rows_do_not_excuse_a_month(self, isolated_db):
+        """Absence of evidence is not evidence of an outage. A DB with no
+        CycleState rows at all must still be audited, otherwise this rule
+        silently disables itself wherever cycle history is missing."""
+        from engine.auto_audit_rules import rule_rebalance_frequency_audit
+        months = _last_n_completed_months(6)
+        with isolated_db() as s:
+            for idx, (y, m) in enumerate(months):
+                if idx == 2:
+                    continue
+                _seed_bulk_trades(s, y, m, 15, n_trades=5)
+            s.commit()   # note: no CycleState rows seeded anywhere
+        result = rule_rebalance_frequency_audit()
+        ym = f"{months[2][0]:04d}-{months[2][1]:02d}"
+        assert result is not None and result["severity"] == "HIGH"
+        assert ym in [v["month"] for v in result["snapshot"]["violations"]]
+        assert result["snapshot"]["months_skipped_halted"] == []
+
+    # ── Known-cadence-gap waivers (2026-09-07) ───────────────────────────
+    # A cadence miss is irreversible: no later fix can retro-create the
+    # rebalance, so without an explicit waiver the finding re-latches the
+    # circuit breaker for the whole 6-month window even after the bug that
+    # caused it is gone. Scoped to mode 11; every entry needs a reason.
+
+    def _write_waivers(self, entries):
+        import json
+        self.waiver_path.write_text(json.dumps(entries), encoding="utf-8")
+
+    def _seed_all_but_last(self, isolated_db):
+        """Every month rebalances except the most recent completed one,
+        which ran fine (completed cycles) but produced no rebalance."""
+        months = _last_n_completed_months(6)
+        with isolated_db() as s:
+            for (y, m) in months:
+                _seed_bulk_trades(s, y, m, 15, n_trades=5)
+                _seed_cycles(s, y, m, "completed", n=3)
+            (y, m) = months[-1]
+            _delete_trades_in_month(s, y, m)
+            s.commit()
+        return f"{months[-1][0]:04d}-{months[-1][1]:02d}"
+
+    def test_waived_month_does_not_fire(self, isolated_db):
+        from engine.auto_audit_rules import rule_rebalance_frequency_audit
+        ym = self._seed_all_but_last(isolated_db)
+        self._write_waivers([{"month": ym, "reason": "known bug, fixed",
+                              "fixed_by": "commit abc123"}])
+        assert rule_rebalance_frequency_audit() is None
+
+    def test_waiver_without_reason_is_rejected(self, isolated_db):
+        """A waiver with no rationale must not silence the rule."""
+        from engine.auto_audit_rules import rule_rebalance_frequency_audit
+        ym = self._seed_all_but_last(isolated_db)
+        self._write_waivers([{"month": ym, "reason": "   "}])
+        result = rule_rebalance_frequency_audit()
+        assert result is not None and result["severity"] == "HIGH"
+        assert ym in [v["month"] for v in result["snapshot"]["violations"]]
+
+    def test_malformed_registry_waives_nothing(self, isolated_db):
+        from engine.auto_audit_rules import rule_rebalance_frequency_audit
+        ym = self._seed_all_but_last(isolated_db)
+        self.waiver_path.write_text("{not json at all", encoding="utf-8")
+        result = rule_rebalance_frequency_audit()
+        assert result is not None
+        assert ym in [v["month"] for v in result["snapshot"]["violations"]]
+
+    def test_waiver_for_a_different_month_does_not_leak(self, isolated_db):
+        from engine.auto_audit_rules import rule_rebalance_frequency_audit
+        ym = self._seed_all_but_last(isolated_db)
+        self._write_waivers([{"month": "1999-01", "reason": "unrelated"}])
+        result = rule_rebalance_frequency_audit()
+        assert result is not None
+        assert ym in [v["month"] for v in result["snapshot"]["violations"]]
+        assert result["snapshot"]["months_waived_known"] == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────

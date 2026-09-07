@@ -6,8 +6,11 @@ route never touches the engine or Streamlit; this layer is the strangler-fig sea
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from typing import Optional
@@ -21,12 +24,49 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """App lifespan: spawn background tasks at startup, cancel at
+    shutdown.
+
+    v18 (2026-06-28): operator_console.worker.periodic_sweep_loop is
+    started here to evict stale JOB_QUEUES entries. See module
+    docstring on `engine.operator_console.worker` "Orphan queue
+    leak" for context. Fail-soft — if worker module isn't importable
+    in some embedded run, app still boots."""
+    sweep_task: Optional[asyncio.Task] = None
+    try:
+        from engine.operator_console import worker as _opcon_worker
+        sweep_task = asyncio.create_task(
+            _opcon_worker.periodic_sweep_loop(interval_seconds=60)
+        )
+        logging.getLogger(__name__).info(
+            "lifespan: operator_console queue sweep task started"
+        )
+    except Exception as _exc:  # noqa: BLE001 — lifespan must not crash boot
+        logging.getLogger(__name__).warning(
+            "lifespan: operator_console sweep task did NOT start: %s", _exc
+        )
+
+    try:
+        yield
+    finally:
+        if sweep_task is not None:
+            sweep_task.cancel()
+            try:
+                await sweep_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+
+
 app = FastAPI(
     title="MacroAlphaPro API",
     version="0.1.0",
     description="Institutional quant-fund backend: book state, decay monitor, agent "
                 "constellation. 0-LLM-in-DECISION — endpoints serve deterministic engine "
                 "output; the agent layer narrates only.",
+    lifespan=_lifespan,
 )
 
 # CORS for the Next.js dev server (and a future deployed origin).
@@ -1219,12 +1259,61 @@ def ops_refresh_start() -> dict:
     return _start_refresh("manual")
 
 
+def _cached_state_invalidated_by_cb_reset(state: dict) -> bool:
+    """v27 (2026-07-01): the last-completed refresh was halted by
+    circuit_breaker SEVERE (exit_code=4). If the CB has since been
+    reset to `none`, the cached "halted" state is stale — the UI
+    should not keep showing 'manual reset required' after the reset
+    actually happened. Returns True iff cached state should be treated
+    as invalidated.
+
+    Root cause of the bug this closes: `_REFRESH_STATE` is
+    process-local in-memory. `manual_reset()` clears the circuit
+    breaker persistence file but has no reference to this cache, so
+    the UI keeps rendering the pre-reset halt message until either
+    (a) someone triggers a new refresh, or (b) the server restarts.
+    Detected 2026-07-01 when v26 heartbeat fix + CB reset left the
+    UI still showing 'Halted: circuit breaker SEVERE' from a cached
+    exit_code=4 that was written before the reset.
+    """
+    if state.get("running"):
+        return False
+    if state.get("exit_code") != 4:
+        return False
+    try:
+        from engine.circuit_breaker import get_status
+        cb = get_status()
+        return getattr(cb, "level", "none") == "none"
+    except Exception:
+        return False
+
+
 @app.get("/api/ops/refresh", tags=["ops"])
 def ops_refresh_status() -> dict:
     """Status of the data-refresh job: running / exit_code / ok / message / log_tail. Cheap
-    in-memory read (poll it while a refresh is in flight)."""
+    in-memory read (poll it while a refresh is in flight).
+
+    v27: if the last-completed refresh was halted by CB SEVERE
+    (exit_code=4) AND the CB has since been reset to `none`, return
+    an invalidated view so the UI stops rendering the stale halt
+    message. `stale_reason` distinguishes this from a fresh clean
+    state so the frontend can render 'ready to re-refresh' if it
+    wants."""
     with _REFRESH_LOCK:
-        return dict(_REFRESH_STATE)
+        state = dict(_REFRESH_STATE)
+    if _cached_state_invalidated_by_cb_reset(state):
+        state.update({
+            "ok":           None,
+            "exit_code":    None,
+            "message":      None,
+            "log_tail":     None,
+            "stale_reason": (
+                "circuit breaker was reset since the last refresh's "
+                "halt; UI cache invalidated. Trigger a new refresh to "
+                "produce a fresh state."
+            ),
+        })
+    return state
 
 
 @app.get("/api/book/perf", tags=["book"])

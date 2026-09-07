@@ -40,9 +40,47 @@ def test_returns_none_below_min_autopsies(tmp_path):
     ap = tmp_path / "autopsies.jsonl"
     _write_autopsies(ap, [
         _autopsy_row("TEST_FAM", "GREEN", aid=f"a{i}")
-        for i in range(4)        # 4 < MIN_AUTOPSIES_FOR_OVERRIDE (5)
+        for i in range(2)        # 2 < MIN_AUTOPSIES_FOR_OVERRIDE (3 since v19)
     ])
     assert bpc.calibrated_family_prior("TEST_FAM", autopsies_path=ap) is None
+
+
+def test_v19_threshold_at_3_returns_calibrated(tmp_path):
+    """v19 (2026-06-28): threshold lowered 5 → 3 so small families with
+    monotonic RED signal (e.g. 3-of-3 RED) get a conservative calibrated
+    prior instead of falling through to the over-optimistic override.
+    Locks the threshold value at 3 — bumping back to 5 must be a
+    deliberate edit + this test update."""
+    ap = tmp_path / "autopsies.jsonl"
+    _write_autopsies(ap, [
+        _autopsy_row("TEST_FAM_REDS", "RED", aid=f"r{i}", n_obs_months=360)
+        for i in range(3)        # exactly at the v19 threshold
+    ])
+    out = bpc.calibrated_family_prior("TEST_FAM_REDS", autopsies_path=ap)
+    assert out is not None, "v19 threshold should fire at N=3"
+    # All 3 RED + alpha*base. Default RED prior is 0.40; Dirichlet
+    # shrinkage at N=3 with n_obs_months=360 (weight=1.0 each) gives:
+    #   posterior_RED = (3 + 3*0.40) / (3 + 3) = 4.2 / 6 = 0.70
+    # i.e. heavy data pull but prior keeps some weight — exactly the
+    # Bayesian behavior we want at low N.
+    assert 0.60 < out["RED"] < 0.80, (
+        f"RED should be heavily-weighted but not 1.0 at N=3 with "
+        f"alpha=3 shrinkage; got {out['RED']:.3f}"
+    )
+    # GREEN should be small but non-zero (the prior keeps some mass)
+    assert 0.05 < out["GREEN"] < 0.20
+
+
+def test_v19_n_equals_2_still_falls_through(tmp_path):
+    """The v19 cutoff is N=3, not N=2 or N=1. Families with only 1-2
+    autopsies should still defer to FAMILY_PRIOR_OVERRIDES — N=2 of
+    one verdict is too noisy to override even a hand-calibrated prior."""
+    ap = tmp_path / "autopsies.jsonl"
+    _write_autopsies(ap, [
+        _autopsy_row("TINY_FAM", "RED", aid=f"r{i}")
+        for i in range(2)
+    ])
+    assert bpc.calibrated_family_prior("TINY_FAM", autopsies_path=ap) is None
 
 
 def test_returns_none_when_file_missing(tmp_path):
@@ -176,10 +214,11 @@ def test_bug4_missing_n_obs_falls_back_to_unit_weight(tmp_path):
 def test_calibration_summary_below_threshold(tmp_path):
     ap = tmp_path / "autopsies.jsonl"
     _write_autopsies(ap, [
-        _autopsy_row("TEST_X", "MARGINAL", aid=f"a{i}") for i in range(3)
+        # v19: threshold is 3, so use 2 to stay below
+        _autopsy_row("TEST_X", "MARGINAL", aid=f"a{i}") for i in range(2)
     ])
     out = bpc.calibration_summary("TEST_X", autopsies_path=ap)
-    assert out["n_autopsies"] == 3
+    assert out["n_autopsies"] == 2
     assert out["override_active"] is False
     assert out["calibrated_prior"] is None
     assert out["base_prior"] is not None

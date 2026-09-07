@@ -107,6 +107,73 @@ def test_assess_liveness_warn_when_today_halted(tmp_ledger):
     assert verdict["verdict"] == "WARN_STATUS"
 
 
+# ── v26 (2026-07-01): late-run detection regression ────────────────
+
+
+def test_assess_liveness_warn_late_run_when_hb_newer_than_expected(tmp_ledger):
+    """v26 regression: when the cron runs LATE (after UTC midnight)
+    the writer stamps the newer UTC date. Pre-v26 the reader still
+    computed expected = previous_day and false-alarmed ALERT_NO_SHOW
+    because heartbeat_for_date(previous_day) was None — even though
+    the latest heartbeat proved the cron ran, just late.
+
+    Concrete scenario from the 2026-07-01 screenshot:
+      - Now: 2026-07-01 03:03 UTC (11:03 SGT)
+      - Latest hb: as_of=2026-07-01, ts=2026-07-01T03:03:27Z
+      - Reader computes expected=2026-06-30 (UTC-22:00 deadline for
+        2026-07-01 hasn't passed yet)
+      - heartbeat_for_date(2026-06-30) is None → previously
+        ALERT_NO_SHOW, now WARN_LATE_RUN."""
+    from engine.research import liveness_heartbeat as L
+    now = _dt.datetime(2026, 7, 1, 3, 3, 27)
+    L.record_run(as_of=_dt.date(2026, 7, 1), exit_code=0)
+    verdict = L.assess_liveness(now_utc=now)
+    assert verdict["verdict"] == "WARN_LATE_RUN", (
+        f"expected WARN_LATE_RUN but got {verdict['verdict']}"
+    )
+    assert verdict["latest"]["as_of"] == "2026-07-01"
+    assert "ran late" in verdict["explanation"]
+
+
+def test_assess_liveness_alert_no_show_when_no_recent_hb_at_all(tmp_ledger):
+    """Confirm v26 doesn't over-index: if NO recent heartbeat exists
+    (the true no-show case), ALERT_NO_SHOW still fires."""
+    from engine.research import liveness_heartbeat as L
+    now = _dt.datetime(2026, 6, 3, 4, 0)
+    L.record_run(as_of=_dt.date(2026, 5, 25), exit_code=0)  # week-old
+    verdict = L.assess_liveness(now_utc=now)
+    assert verdict["verdict"] == "ALERT_NO_SHOW"
+
+
+def test_assess_liveness_alert_no_show_when_hb_stale_beyond_24h(tmp_ledger):
+    """v26 only promotes to WARN_LATE_RUN when the latest hb is fresh
+    (< 24h). A hb from 3 days ago with a newer as_of doesn't rescue
+    the caller — treat as ALERT_NO_SHOW."""
+    from engine.research import liveness_heartbeat as L
+    now = _dt.datetime(2026, 7, 1, 3, 0)
+    stale_ts = "2026-06-27T22:00:00Z"
+    tmp_ledger.write_text(json.dumps({
+        "ts":     stale_ts,
+        "as_of":  "2026-07-01",
+        "status": "success",
+        "exit_code": 0,
+    }) + "\n", encoding="utf-8")
+    verdict = L.assess_liveness(now_utc=now)
+    # age = ~77h > 24h window → falls through to ALERT_NO_SHOW
+    assert verdict["verdict"] == "ALERT_NO_SHOW"
+
+
+def test_hb_ge_helper():
+    """Regression: _hb_ge tolerates None / bad strings without raising."""
+    from engine.research.liveness_heartbeat import _hb_ge
+    assert _hb_ge("2026-07-01", _dt.date(2026, 6, 30)) is True
+    assert _hb_ge("2026-06-30", _dt.date(2026, 6, 30)) is True
+    assert _hb_ge("2026-06-29", _dt.date(2026, 6, 30)) is False
+    assert _hb_ge(None, _dt.date(2026, 6, 30)) is False
+    assert _hb_ge("", _dt.date(2026, 6, 30)) is False
+    assert _hb_ge("garbage-date", _dt.date(2026, 6, 30)) is False
+
+
 def test_assess_liveness_saturday_with_friday_run_present_is_ok(tmp_ledger):
     """Saturday should NOT silently say 'weekend, don't care' — if
     Friday's run is missing we want to know on Saturday morning.

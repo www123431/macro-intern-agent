@@ -89,6 +89,18 @@ SIGNAL_KINDS = (
     "spanning_test",          # BUG-2 fix (2026-06-13) — "is X spanned by
                               # model M?" Avoids Sonnet drift that turned
                               # FF5-vs-FF3 claims into combo specs.
+    "ml_ensemble",            # v45 (2026-07-02) — HistGradientBoostingRegressor
+                              # combiner over 11 canonical factors; walk-forward
+                              # CV. Template deliberately frozen at 1 config to
+                              # keep Bailey-LdP n_trials clean.
+    "ml_size_only",           # v46 (2026-07-02) — companion to v45; HistGBM on
+                              # log_mcap alone. Isolates whether v45's ensemble
+                              # alpha came from size or from combination.
+    "quality_composite",      # v50 (2026-07-02) — Asness-Frazzini-Pedersen 2013
+                              # QMJ 3-component (profit + safety + conservatism).
+                              # Missing 4th AFP leg (payout / net_share_issuance).
+    "iv_atm_cross_sec",       # v52 (2026-07-02) — Cao-Han 2013 cross-sec
+                              # implied-vol level factor. First OPTIONS_CROSS_SEC.
     "requires_custom_code",   # escape hatch — no template fits cleanly
 )
 
@@ -101,7 +113,11 @@ UNIVERSES = (
     "us_equities_sp500",      # S&P 500 constituents (point-in-time)
     "us_equities_sector_etf", # 11 SPDR sector ETFs (for sector momentum)
     "fx_g10",                 # G10 FX crosses vs USD
-    "commodity_futures_27",   # 27-contract continuous futures basket
+    "commodity_futures_24",   # 24-underlying Refinitiv Datastream panel
+                              # (v42 2026-07-02 shipped). Brent/WTI/Gold/Copper/
+                              # Cocoa/Coffee/Corn/Wheat/Cotton/Cattle/... 2000-2026.
+    "corporate_bonds_ig_hy",  # v48 (2026-07-02) — 89,754 CUSIP corp bond panel
+                              # 2013-2024 (IG + HY, 3 tmt buckets 1-15y).
     "us_treasury_curve",      # 2y/5y/10y/30y on-the-run
     "global_equity_indices",  # MSCI country indices (cross-country mom)
     "us_balanced_60_40",      # bt-flex-4.1 — 60% SPY + 40% IEF (7-10y
@@ -544,7 +560,7 @@ CONTROLLED universe options:
   us_equities_sp500        — S&P 500 constituents (point-in-time)
   us_equities_sector_etf   — 11 SPDR sector ETFs
   fx_g10                   — G10 FX crosses vs USD
-  commodity_futures_27     — 27-contract continuous futures basket
+  commodity_futures_24     — 24-underlying commodity futures basket (v42)
   us_treasury_curve        — 2y / 5y / 10y / 30y on-the-run
   global_equity_indices    — MSCI country indices
   us_balanced_60_40        — 60% SPY + 40% IEF (7-10y treasury) base

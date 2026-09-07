@@ -211,6 +211,129 @@ def build_carry_book() -> pd.Series:
     return (carry_g - 4.0 * RT_CY / 10000.0 / 12).rename("carry")
 
 
+# ────────────────────────────────────────────────────────────────────
+# v47 sleeve builders (2026-07-02) — SIZE tercile + BAB-lite
+# Both are RESEARCH-PROMOTED per promote_proposals filed in same session.
+# NEITHER should activate at full weight without human review + running
+# deploy_config.py promote --id config_e ceremony.
+# ────────────────────────────────────────────────────────────────────
+
+
+def build_ml_size_only_book() -> pd.Series:
+    """v47 sleeve: SIZE via HistGBM DYNAMIC direction — matches v46 research.
+
+    Provenance:
+      source_verdict_event_id: 0b038025-70d5-4256-a0ea-b0888aa05059
+        (v46 ml_size_only GREEN verdict, t=2.86, Sharpe 1.05, 89 OOS mo)
+      promote_proposal:        promote_67517b0b4378 (approved audit-trail,
+                                capital not yet deployed)
+
+    IMPORTANT — static vs dynamic:
+      Live prototype 2026-07-02 showed that STATIC size tercile (always
+      long-small-short-large) has Sharpe **-1.78** over 1990-2024 and
+      **-2.37** post-2014. The v46 GREEN comes from HistGBM DYNAMICALLY
+      switching direction based on 36-month rolling training window.
+      Recent SMB has been so weak that GBM often flips to long-large-
+      short-small (crowding into MEGA cap regime post-2020) — which is
+      what makes it GREEN in recent OOS periods.
+
+      This is NOT vanilla Banz 1981 SMB. It IS a size-momentum regime
+      switch model. Reviewers should treat it accordingly.
+
+    Implementation:
+      Mirrors engine.agents.strengthener.templates.ml_size_only exactly:
+      HistGradientBoostingRegressor on rank-normalized log_mcap,
+      rolling 36-month train → predict → tercile L/S by predicted return.
+      Frozen hyperparams (same seed=42) → same output as v46 template.
+
+    Cost model:
+      RT_EQ = 30bp/side. Turnover is REGIME-DEPENDENT (switching from
+      long-small to long-large involves crossing tercile boundaries).
+      Approximated at 6.0 × RT_EQ / 10000 / 12 (higher than static
+      tercile's 4.0× to reflect regime-switch drag).
+    """
+    from pathlib import Path
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    p = Path(__file__).resolve().parents[2] / "data" / "cache" / "_ml_feature_panel.parquet"
+    df = pd.read_parquet(p)
+    df = df.dropna(subset=["y", "log_mcap"]).copy()
+    df["log_mcap_r"] = df.groupby("month")["log_mcap"].rank(pct=True).fillna(0.5)
+
+    months = sorted(df["month"].unique())
+    TRAIN_WINDOW = 36
+    preds: list[pd.DataFrame] = []
+    for i in range(TRAIN_WINDOW, len(months)):
+        train_m = months[i - TRAIN_WINDOW:i]
+        test_m = months[i]
+        train = df[df["month"].isin(train_m)]
+        test  = df[df["month"] == test_m]
+        if len(test) < 50:
+            continue
+        model = HistGradientBoostingRegressor(
+            max_iter=200, max_depth=5, learning_rate=0.03,
+            l2_regularization=0.5, random_state=42,
+        )
+        model.fit(train[["log_mcap_r"]].values, train["y"].values)
+        t2 = test[["month", "y"]].copy()
+        t2["pred"] = model.predict(test[["log_mcap_r"]].values)
+        preds.append(t2)
+    if not preds:
+        return pd.Series(dtype=float, name="ml_size_only")
+
+    oos = pd.concat(preds, ignore_index=True)
+    def _ls(g: pd.DataFrame) -> float:
+        if len(g) < 30:
+            return np.nan
+        s = g.sort_values("pred")
+        n = len(s); k = max(1, n // 3)
+        return float(s["y"].tail(k).mean() - s["y"].head(k).mean())
+    gross = oos.groupby("month").apply(_ls, include_groups=False).dropna()
+    # Cost: 6.0 × RT_EQ = 180bp/yr (higher than static due to regime switch)
+    return (gross - 6.0 * RT_EQ / 10000.0 / 12).rename("ml_size_only")
+
+
+def build_bab_book() -> pd.Series:
+    """v47 sleeve: BAB (Betting-Against-Beta) via cached bab_lite signal.
+
+    Provenance:
+      source_verdict_event_id: 7aecbb79-a46e-4064-ba11-d548fb588538
+        (BAB spanning_test GREEN, alpha_t=3.73, 1963-07..2026-05 sample)
+      promote_proposal:        promote_631c70d40869 (approved audit-trail,
+                                capital not yet deployed)
+
+    IMPORTANT recent-decade decay warning:
+      _bab_lite_monthly.parquet (2014-11 .. 2024-05, 115 mo) has raw
+      Sharpe **-0.25** — annualized. The 63-year GREEN masks a
+      structurally decayed post-2014 sub-sample. This is exactly the
+      pattern S7 Gate 5 (multi-period stability) SOFT_PASS with worst/
+      best 0.15 flagged: full-sample verdict does not imply recent-window
+      deployment safety.
+
+      Recommendation: DO NOT activate at any positive weight until
+      either (a) BAB-real (Frazzini-Pedersen full leverage
+      construction) is built from scratch to verify vs the lite proxy,
+      or (b) explicit human accepts the "buying decayed alpha" risk
+      with a decay-monitored 1% probe weight.
+
+      This builder is included for architectural completeness — it
+      lets active_deployment.yaml reference a valid dotted path — but
+      the CANDIDATE config_e proposes BAB at base_weight=0.0 (parked,
+      not deployed) with a decay-watch flag. Uplifting to >0 is a
+      separate ceremony that MUST include re-verification.
+
+    Cost model:
+      RT_EQ = 30bp/side. Bab-lite signal-turnover unknown at builder
+      layer — assume 4.0 × RT_EQ / 10000 / 12 same as size.
+    """
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "data" / "cache" / "_bab_lite_monthly.parquet"
+    df = pd.read_parquet(p)
+    df.index = pd.to_datetime(df.index)
+    gross = df["bab_lite"]
+    return (gross - 4.0 * RT_EQ / 10000.0 / 12).rename("bab")
+
+
 def scale_to_book_vol(book: pd.Series, book_vol_target: float) -> pd.Series:
     """把整本账本线性缩放到目标年化波动(尺寸/杠杆选择)。线性缩放 ⇒ Sharpe 不变，
     收益与回撤同步 1:1 放大。这是部署时的 sizing 旋钮。"""

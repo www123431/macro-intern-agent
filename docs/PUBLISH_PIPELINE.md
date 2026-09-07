@@ -122,8 +122,17 @@ Typical run replaces 80-100 substrings across 40-90 files.
 After the snapshot is built, the script greps the OUTPUT for
 suspicious patterns; ANY hit fails the pipeline:
 
-- `\b72360\b` / `\bzhang21\b` / `\bwang214\b` etc. — sanity check
-  that sanitize_patterns did its job.
+- Word-boundary-anchored forms of every identifier listed in the
+  sanitize table above (Windows user id, WRDS usernames, …) — a sanity
+  check that `sanitize_patterns` did its job.
+
+  Do NOT spell those identifiers out here. They were written inline
+  until 2026-09-07, and because each was quoted as `\b<id>\b` the `\b`
+  prefix put a word character immediately before the id, so the
+  post-check's own word-boundary regex could not match its own
+  documentation. The literals therefore survived sanitization and shipped
+  publicly from v16 (2026-06-26) onward. Read the live values from
+  `.publishrc.yaml`, which is not published.
 - `sk-ant-api[a-zA-Z0-9_-]{20,}` — real Anthropic API key shape
   (tightened so test fixtures like `sk-ant-fake` don't false-positive).
 - `sk-proj-[a-zA-Z0-9]{20,}` — OpenAI project keys.

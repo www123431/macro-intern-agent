@@ -3,6 +3,7 @@
 Covers:
   - Framework: GateResult + GateStatus + run_all_gates skeleton
   - Gate 1: bug-regression test (verdict at top-level, not payload)
+  - Gate 2: cost-robust — stress survival / fragile / fails baseline / missing
   - Gate 3: PIT clean — doc-exists / doc-missing / doc-has-section
   - Gate 5: multi-period — institutional_stable=True / worst-best severe / missing
   - Gate 6: anchor-residual — strong t / marginal / weak / negative
@@ -17,6 +18,7 @@ from engine.operator_console.gates import (
 )
 from engine.operator_console.gates import (
     gate1_verdict_green,
+    gate2_cost_robust,
     gate3_pit_clean,
     gate5_multi_period,
     gate6_anchor_residual,
@@ -270,11 +272,136 @@ def test_gate6_skipped_no_anchor_block():
     assert r.status == GateStatus.SKIPPED
 
 
+# ── Gate 2 — cost-robust ─────────────────────────────────────────
+
+
+def _make_cost_event(cost_robust_verdict, grid_verdicts, *, tc=13.0,
+                     turnover=0.17):
+    """Helper: build a verdict event with the cost_stress block.
+
+    grid_verdicts: dict like {0: 'GREEN', 30: 'GREEN', 60: 'GREEN', 80: 'GREEN'}.
+    Each grid level gets a synthetic sharpe/nw_t so the detail block is
+    populated for the assertions that read it.
+    """
+    cost_stress = {}
+    for bp, v in grid_verdicts.items():
+        # Synthetic Sharpe degrades 0.1 per 20bp so the order isn't accidentally GREEN.
+        sharpe = max(0.05, 0.7 - bp / 200.0)
+        cost_stress[f"{bp}bp"] = {
+            "sharpe":     sharpe,
+            "nw_t_stat":  sharpe * 5,
+            "ann_return": sharpe * 0.10,
+            "verdict":    v,
+        }
+    return {
+        "event_type": "factor_verdict_filed",
+        "verdict":    "GREEN",
+        "metrics": {
+            "cost_robust_verdict": cost_robust_verdict,
+            "tc_bp_per_rt":        tc,
+            "avg_turnover":        turnover,
+            "cost_stress":         cost_stress,
+        },
+    }
+
+
+def test_gate2_pass_robust_all_levels_green():
+    """cost_robust GREEN + every stress level still GREEN → PASS.
+    This is the 5/63 'truly cost-robust' band from empirical study."""
+    ev = _make_cost_event("GREEN", {0: "GREEN", 30: "GREEN", 60: "GREEN",
+                                     80: "GREEN"})
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.PASS
+    assert "80bp" in r.summary
+    assert r.detail["cost_robust_verdict"] == "GREEN"
+    assert len(r.detail["stress_grid"]) == 4
+
+
+def test_gate2_pass_when_highest_stress_marginal():
+    """Degrading to MARGINAL at highest stress still PASSes — alpha
+    persists, just thinner. SOFT-PASS is reserved for stress-RED."""
+    ev = _make_cost_event("GREEN", {0: "GREEN", 30: "GREEN", 60: "GREEN",
+                                     80: "MARGINAL"})
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.PASS
+
+
+def test_gate2_soft_pass_fragile_under_stress():
+    """cost_robust GREEN at baseline but highest stress = RED → SOFT.
+    Survives realistic cost but fragile if AUM pushes effective cost up."""
+    ev = _make_cost_event("GREEN", {0: "GREEN", 30: "GREEN", 60: "MARGINAL",
+                                     80: "RED"})
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.SOFT_PASS
+    assert "fragile" in r.summary.lower() or "stress" in r.summary.lower()
+
+
+def test_gate2_fail_cost_robust_red():
+    """Dispatcher already said cost_robust_verdict is RED — promote
+    would deploy on an edge that doesn't survive realistic cost."""
+    ev = _make_cost_event("RED", {0: "GREEN", 30: "RED", 60: "RED",
+                                   80: "RED"})
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.FAIL
+    assert "evaporates" in r.summary.lower() or "does not survive" in r.summary.lower()
+
+
+def test_gate2_fail_cost_robust_uppercase_red():
+    """Verdict casing should not matter — comparison is case-insensitive."""
+    ev = _make_cost_event("red", {0: "RED", 30: "RED"})
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.FAIL
+
+
+def test_gate2_skipped_no_cost_stress_block():
+    """Pre-dispatcher-v0.1.0 verdict has no cost_stress — SKIPPED."""
+    ev = {"event_type": "factor_verdict_filed", "verdict": "GREEN",
+          "metrics": {"sharpe": 0.5}}
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.SKIPPED
+    assert "cost_stress" in r.summary or "Pre-dispatcher" in r.summary
+
+
+def test_gate2_skipped_when_grid_present_but_robust_verdict_missing():
+    """Schema mismatch — grid present but no cost_robust_verdict field."""
+    ev = {"event_type": "factor_verdict_filed", "verdict": "GREEN",
+          "metrics": {
+              "cost_stress": {"0bp": {"verdict": "GREEN", "sharpe": 0.7}},
+              "tc_bp_per_rt": 13.0,
+          }}
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.SKIPPED
+    assert "cost_robust_verdict" in r.summary
+
+
+def test_gate2_soft_pass_when_grid_keys_unparseable():
+    """cost_robust says GREEN but grid keys aren't '<int>bp' format —
+    can't verify stress tail. Don't lie and PASS; SOFT_PASS for review."""
+    ev = {"event_type": "factor_verdict_filed", "verdict": "GREEN",
+          "metrics": {
+              "cost_robust_verdict": "GREEN",
+              "tc_bp_per_rt":        13.0,
+              "cost_stress":         {"baseline": {"verdict": "GREEN"},
+                                       "doubled":  {"verdict": "GREEN"}},
+          }}
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.SOFT_PASS
+    assert "unparseable" in r.summary.lower()
+
+
+def test_gate2_soft_pass_when_highest_verdict_unrecognized():
+    """Stress level returns unknown verdict label — degrade to SOFT_PASS,
+    don't crash and don't lie."""
+    ev = _make_cost_event("GREEN", {0: "GREEN", 30: "MAYBE"})
+    r = gate2_cost_robust.check(ev, {})
+    assert r.status == GateStatus.SOFT_PASS
+    assert "unrecognized" in r.summary.lower()
+
+
 # ── DEFERRED stubs ───────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("fn,gate_id", [
-    (_deferred.gate2_check, "gate2_cost_robust"),
     (_deferred.gate4_check, "gate4_replication"),
     (_deferred.gate7_check, "gate7_cross_sleeve_corr"),
     (_deferred.gate8_check, "gate8_capacity"),
@@ -319,10 +446,12 @@ def test_run_all_gates_on_real_green_event_shape():
     assert len(results) == 8
     by_id = {r.gate_id: r for r in results}
     assert by_id["gate1_verdict_green"].status == GateStatus.PASS
+    # gate2 has no cost_stress block on this minimal event → SKIPPED
+    assert by_id["gate2_cost_robust"].status == GateStatus.SKIPPED
     assert by_id["gate3_pit_clean"].status == GateStatus.FAIL
     assert by_id["gate5_multi_period"].status == GateStatus.SKIPPED
     assert by_id["gate6_anchor_residual"].status == GateStatus.SKIPPED
-    for stub_id in ("gate2_cost_robust", "gate4_replication",
+    for stub_id in ("gate4_replication",
                     "gate7_cross_sleeve_corr", "gate8_capacity"):
         assert by_id[stub_id].status == GateStatus.DEFERRED
 

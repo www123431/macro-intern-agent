@@ -650,6 +650,222 @@ CONTRACT_REGISTRY: dict[str, TemplateContract] = {
             ),
         ),
     ),
+
+    "iv_atm_cross_sectional": TemplateContract(
+        template_name           = "iv_atm_cross_sectional",
+        template_version        = "v1.0_2026-07-02",
+        pit_audit_certified_by  = "claude-2026-07-02-v52",
+        pit_audit_date          = "2026-07-02",
+        pit_audit_notes         = (
+            "v52 (2026-07-02): FIRST options-based cross-sectional template. "
+            "Xing-Zhang-Zhao 2010 / Cao-Han 2013 iv_atm level factor. "
+            "Signal: cross-sectional rank of ATM implied volatility per "
+            "month; tercile L/S dollar-neutral, LONG high-iv (Cao-Han "
+            "direction — this-window prototype empirical). "
+            "PIT-clean: iv_atm is OptionMetrics standardized daily volsurf "
+            "end-of-day (T+1 published). Sample 2013-11..2024-06. "
+            "Expected verdict RED (gross t=+1.61, net t≈+1.3). Documents "
+            "further factor decay + adds OPTIONS_CROSS_SEC family entry."
+        ),
+        supported_signal_kinds  = ("iv_atm_cross_sec",),
+        supported_universes     = ("us_equities_top_3000",),
+        supported_signals       = ("iv_atm_tercile_ls_long_high",),
+        canonical_paper_id      = "cao_han_2013",
+        canonical_paper_window  = "1996-01:2011-12",
+        canonical_paper_t       = 3.0,
+    ),
+
+    "qmj_composite": TemplateContract(
+        template_name           = "qmj_composite",
+        template_version        = "v1.0_2026-07-02",
+        pit_audit_certified_by  = "claude-2026-07-02-v50",
+        pit_audit_date          = "2026-07-02",
+        pit_audit_notes         = (
+            "v50 (2026-07-02): FIRST Quality template. AFP 2013 QMJ "
+            "composite using 3-of-4 subcomponents (profitability = "
+            "Novy-Marx gp; safety = -vol_6m; conservatism = -asset_growth). "
+            "Missing payout / net_share_issuance leg. Each component "
+            "z-scored cross-sectionally per month, then averaged with "
+            "skipna=False → require all 3 features non-null. Tercile L/S "
+            "dollar-neutral by composite score. PIT-clean: gp uses "
+            "Compustat funda rdq lag per Phase 1.5/1.6 bitemporal design; "
+            "vol_6m is trailing 6-month realized (no forward look); "
+            "asset_growth uses lagged assets_yoy per FF CMA convention. "
+            "Sample 2013-11..2024-06 entirely post-QE. Expected verdict "
+            "RED — component q_safety t=-1.19 in this window reflects "
+            "'low-vol crash' regime (2020-2024 mega-cap tech rally punishing "
+            "low-vol defensives). Not a bug; honest research finding."
+        ),
+        supported_signal_kinds  = ("quality_composite",),
+        supported_universes     = ("us_equities_top_3000",),
+        supported_signals       = ("qmj_3factor_profit_safety_conservatism",),
+        canonical_paper_id      = "asness_frazzini_pedersen_2013",
+        canonical_paper_window  = "1957-01:2011-12",
+        canonical_paper_t       = 5.5,
+    ),
+
+    "treasury_term_carry": TemplateContract(
+        template_name           = "treasury_term_carry",
+        template_version        = "v1.0_2026-07-02",
+        pit_audit_certified_by  = "claude-2026-07-02-v49",
+        pit_audit_date          = "2026-07-02",
+        pit_audit_notes         = (
+            "v49 (2026-07-02): FIRST rates template. Rounds out CARRY "
+            "family to 4 asset classes (equity FX / commodity / credit "
+            "/ rates). Signal = passive term-premium factor = TLT_ret "
+            "minus lagged 3m-bill-implied return. PIT-clean: TLT is "
+            "yfinance adjusted close (published EOD, no restatement); "
+            "FRED CMT DGS3MO is next-day-published constant-maturity "
+            "series (Treasury auction rates; no restatement). "
+            "Sample 2002-12..2026-05 (FRED CMT starts 2002-01). "
+            "Timing variants tested in prototype all HURT vs passive "
+            "(Cochrane-Piazzesi 2005 §5 forward-rate coef instability). "
+            "Expected verdict RED — same post-QE decay pattern as v48 "
+            "bond credit carry. pre-2013 sub-sample MARGINAL (t=1.60), "
+            "post-2013 essentially zero (t=-0.22). Regime split recorded "
+            "in metrics for downstream reviewer."
+        ),
+        supported_signal_kinds  = ("carry",),
+        supported_universes     = ("us_treasury_curve",),
+        supported_signals       = ("carry_term_premium_tlt_minus_3m",),
+        canonical_paper_id      = "fama_bliss_1987",
+        canonical_paper_window  = "1953-01:1985-12",
+        canonical_paper_t       = 3.0,
+    ),
+
+    "bond_credit_carry": TemplateContract(
+        template_name           = "bond_credit_carry",
+        template_version        = "v1.0_2026-07-02",
+        pit_audit_certified_by  = "claude-2026-07-02-v48",
+        pit_audit_date          = "2026-07-02",
+        pit_audit_notes         = (
+            "v48 (2026-07-02): FIRST bond template. Corporate bond credit "
+            "carry HY - IG duration-controlled portfolio. Loads "
+            "_bondret_panel.parquet (2.7M rows, 89,754 CUSIPs, 133 months "
+            "2013-06..2024-06). Signal: within each of 3 tmt buckets "
+            "(1-3y, 3-7y, 7-15y), amount-weighted mean return of HY minus "
+            "amount-weighted mean return of IG. Portfolio = equal weight "
+            "across 3 buckets → isolates credit premium from term premium. "
+            "PIT-clean: bond returns are month-end realized; rating_class "
+            "and tmt are observed at month-start. amount_outstanding "
+            "known at reporting date. No forward look. "
+            "Sample entirely post-QE (2013+) — historical IPR 2018 "
+            "1988-2015 Sharpe 0.7-1.0 not achievable in this window "
+            "due to structural spread compression. Expected verdict: "
+            "RED (t=1.64 gross, ~1.4 net) — this is honest evidence of "
+            "post-QE credit-premium decay, not a template bug."
+        ),
+        supported_signal_kinds  = ("carry",),
+        supported_universes     = ("corporate_bonds_ig_hy",),
+        supported_signals       = ("carry_credit_spread_hy_minus_ig_dur_controlled",),
+        canonical_paper_id      = "israel_palhares_richardson_2018",
+        canonical_paper_window  = "1988-01:2015-12",
+        canonical_paper_t       = 3.5,
+    ),
+
+    "ml_size_only": TemplateContract(
+        template_name           = "ml_size_only",
+        template_version        = "v1.0_2026-07-02",
+        pit_audit_certified_by  = "claude-2026-07-02-v46",
+        pit_audit_date          = "2026-07-02",
+        pit_audit_notes         = (
+            "v46 (2026-07-02): Companion to v45 ml_ensemble_combiner. "
+            "Single-feature (log_mcap) HistGradientBoostingRegressor. "
+            "SAME hyperparams as v45 (max_iter=200, max_depth=5, "
+            "lr=0.03, l2=0.5, seed=42). SAME walk-forward CV. Diff "
+            "= feature set restricted to size only. Rank normalization "
+            "per month cross-section. PIT-clean via _ml_feature_panel "
+            "same as v45. Isolates whether v45 t=2.11 came from "
+            "ensemble or from size alone — expected t≈2.57 (GREEN "
+            "band edge). If GREEN, S7 Gate 6 anchor-residual will "
+            "likely attribute most alpha to SMB — this is a KNOWN "
+            "SIZE exposure with GBM tail-interpolation, not novel ML."
+        ),
+        supported_signal_kinds  = ("ml_size_only",),
+        supported_universes     = ("us_equities_top_3000",),
+        supported_signals       = ("ml_gbm_size_only_rank_normalized",),
+        canonical_paper_id      = "banz_1981",     # Banz 1981 size premium origin
+        canonical_paper_window  = "1926-01:1975-12",
+        canonical_paper_t       = 3.0,   # Banz 1981 Table 1 SMB t across window
+    ),
+
+    "ml_ensemble_combiner": TemplateContract(
+        template_name           = "ml_ensemble_combiner",
+        template_version        = "v1.0_2026-07-02",
+        pit_audit_certified_by  = "claude-2026-07-02-v45",
+        pit_audit_date          = "2026-07-02",
+        pit_audit_notes         = (
+            "v45 (2026-07-02): FIRST ML template. HistGradientBoostingRegressor "
+            "on 11 canonical cross-sectional factors (mom_12_1, rev_1m, vol_6m, "
+            "sue, log_mcap, gp, asset_growth, bm, iv_atm, iv_skew, news_ess), "
+            "each rank-normalized cross-sectionally per month. Walk-forward CV "
+            "(36-month rolling train → 1-month OOS predict), no leakage. "
+            "Portfolio: tercile L/S dollar-neutral by predicted return. "
+            "PIT-clean: rank normalization is same-month cross-sectional "
+            "(no time overlap); features from _ml_feature_panel.parquet built "
+            "with knowable-at lags (Compustat rdq + CRSP eom conventions). "
+            "y is next-month realized return, aligned so month t train uses "
+            "month t features → predicts month t+1 return. Hyperparams frozen "
+            "(max_iter=200, max_depth=5, lr=0.03, l2=0.5, seed=42) — "
+            "deliberately not grid-searched to keep Bailey-LdP n_trials at 1."
+        ),
+        supported_signal_kinds  = ("ml_ensemble",),
+        supported_universes     = ("us_equities_top_3000",),
+        supported_signals       = ("ml_gbm_11feature_rank_normalized",),
+        canonical_paper_id      = "gu_kelly_xiu_2020",   # GKX 2020 ML asset pricing
+        canonical_paper_window  = "1957-03:2016-12",
+        canonical_paper_t       = 6.0,   # GKX 2020 neural net US-eq deep model ~ Sharpe 2 → t ≈ 6
+    ),
+
+    "commodity_carry_futures": TemplateContract(
+        template_name           = "commodity_carry_futures",
+        template_version        = "v1.0_2026-07-02",
+        pit_audit_certified_by  = "claude-2026-07-02-v42",
+        pit_audit_date          = "2026-07-02",
+        pit_audit_notes         = (
+            "v42 (2026-07-02): Cross-sectional commodity-futures carry, "
+            "tercile L/S over 24 Refinitiv underlyings 2000-2026. "
+            "Carry signal = -ln(F_far / F_near) * 365 / days_gap at end "
+            "of each month. Return computed as SAME-futcode 30-day "
+            "forward price change (explicitly EXCLUDES roll return "
+            "contamination — live-pilot showed naive front-price "
+            "pct_change produced spurious t=7.7 on flipped sign). "
+            "PIT-clean: cmdty_settle.parquet is Refinitiv settle history "
+            "with no restatement; cmdty_contracts.parquet lasttrddate "
+            "is the contract calendar known at listing. Both cache "
+            "files snapshotted 2026-06 during pre-v42 data audit — "
+            "no forward look. Deferred: vol-scaling, FF5 spanning, "
+            "cost stress (heterogeneous cocoa vs WTI), replication "
+            "against Koijen 2018 (Table 3 t=6.31 on 55 commodities; "
+            "our 24-underlying panel is expected to underperform)."
+        ),
+        supported_signal_kinds  = ("carry",),
+        supported_universes     = ("commodity_futures_24",),
+        supported_signals       = ("carry_term_structure_slope",),
+        canonical_paper_id      = "koijen_moskowitz_pedersen_vrugt_2018",
+        canonical_paper_window  = "1980-01:2012-12",
+        canonical_paper_t       = 6.31,  # KMPV 2018 Table 3 commodity carry
+        required_data_shape     = (
+            DataShapeRequirement(
+                source = "futures.settle",
+                frequency = "daily",
+                aggregation = None,
+                notes = ("_cmdty_settle.parquet: 4.22M rows (futcode, "
+                          "date_, settlement) 2000-2026. Refinitiv "
+                          "Datastream export cached 2026-06. Per-contract "
+                          "settle history joined against contracts panel."),
+            ),
+            DataShapeRequirement(
+                source = "futures.settle",   # contracts metadata same source
+                frequency = "monthly",
+                aggregation = None,
+                notes = ("_cmdty_contracts.parquet: 9,553 contracts x 24 "
+                          "underlyings with (futcode, clscode, lasttrddate, "
+                          "startdate, contrname, isocurrcode). Contract "
+                          "calendar known at listing → no PIT concern."),
+            ),
+        ),
+    ),
 }
 
 

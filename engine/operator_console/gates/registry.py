@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from engine.operator_console.gates import GateResult
 from engine.operator_console.gates import gate1_verdict_green
+from engine.operator_console.gates import gate2_cost_robust
 from engine.operator_console.gates import gate3_pit_clean
 from engine.operator_console.gates import gate5_multi_period
 from engine.operator_console.gates import gate6_anchor_residual
@@ -33,7 +34,7 @@ GateCheck = Callable[[dict[str, Any], dict[str, Any]], GateResult]
 GATES: list[tuple[str, str, GateCheck]] = [
     # (gate_id,                title,                                      check fn)
     ("gate1_verdict_green",   "Verdict is GREEN",                          gate1_verdict_green.check),
-    ("gate2_cost_robust",     "Cost-robust (Almgren-Chriss)",              _deferred.gate2_check),
+    ("gate2_cost_robust",     "Cost-robust (Almgren-Chriss)",              gate2_cost_robust.check),
     ("gate3_pit_clean",       "PIT clean (look-ahead audit)",              gate3_pit_clean.check),
     ("gate4_replication",     "Replication (γ persona)",                   _deferred.gate4_check),
     ("gate5_multi_period",    "Multi-period stability",                    gate5_multi_period.check),

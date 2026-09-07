@@ -42,6 +42,11 @@ VIX_SPIKE_THRESHOLD  = 0.30   # 30% single-day VIX rise → SEVERE
 QUOTA_MEDIUM_FRAC    = 0.80   # >80% RPD consumed → MEDIUM
 _STATE_FILE = Path(__file__).parent / "state" / "circuit_breaker.json"
 _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+# v28 (2026-07-01): audit trail for admin manual_reset() calls. Kept
+# under data/state/ so it's easy to grep from anywhere without needing
+# to know engine layout. Append-only. Consumers (like the UI's cache
+# invalidator) can read latest_reset_at() to know when a reset happened.
+_RESET_LEDGER = Path(__file__).resolve().parents[1] / "data" / "state" / "cb_reset_events.jsonl"
 _lock = threading.Lock()
 
 
@@ -251,13 +256,74 @@ def manual_reset(reason: str = "") -> None:
     """
     Clear a SEVERE circuit breaker state. Must be called explicitly from Admin UI.
     Logs the reset event for audit trail.
+
+    v28 (2026-07-01): additionally appends an audit row to
+    `data/state/cb_reset_events.jsonl` so downstream consumers can
+    observe reset timing across process boundaries (e.g. the UI's
+    /api/ops/refresh cache invalidator introduced in v27).
     """
     with _lock:
+        prior_state = _load_persistent()
         _clear_persistent()
         logger.warning(
             "CircuitBreaker SEVERE manually reset. Reason: %s",
             reason or "(no reason provided)",
         )
+        _append_reset_event(reason=reason, prior_state=prior_state)
+
+
+def _append_reset_event(*, reason: str,
+                          prior_state: Optional["CircuitBreakerState"]) -> None:
+    """Persist a reset event to the audit ledger. Best-effort: never
+    raises to the caller so a broken audit path can't block resets."""
+    try:
+        _RESET_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts":            datetime.datetime.utcnow().replace(
+                                tzinfo=datetime.timezone.utc,
+                             ).isoformat(),
+            "reason":        reason or "",
+            "prior_level":   (prior_state.level if prior_state else "none"),
+            "prior_reason":  (prior_state.reason if prior_state else None),
+            "prior_triggered_at": (
+                prior_state.triggered_at if prior_state else None
+            ),
+        }
+        with _RESET_LEDGER.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, default=str) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("CircuitBreaker: failed to append reset event: %s", exc)
+
+
+def latest_reset_at() -> Optional[str]:
+    """Return the ISO-8601 UTC timestamp of the most recent manual
+    reset, or None if no reset has ever been recorded. Cheap: reads
+    only the last line of the append-only ledger.
+
+    Consumers use this to detect stale in-memory caches: e.g. the
+    /api/ops/refresh cache reads its own last-completed timestamp
+    and, if a reset happened AFTER, treats the cached exit_code=4
+    halt as invalidated.
+    """
+    if not _RESET_LEDGER.is_file():
+        return None
+    last: Optional[str] = None
+    try:
+        with _RESET_LEDGER.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = row.get("ts")
+                if ts:
+                    last = str(ts)
+    except Exception:  # noqa: BLE001
+        return last
+    return last
 
 
 def get_status() -> CircuitBreakerState:

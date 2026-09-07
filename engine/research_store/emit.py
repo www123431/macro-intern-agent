@@ -643,6 +643,17 @@ def papers_curator_synthesis_run(
         "snapshot_events":          int(snapshot.get("recent_events", 0)),
         "snapshot_doctrine":        int(snapshot.get("doctrine_snippets", 0)),
         "snapshot_ts":              snapshot.get("snapshot_ts", ""),
+        # v31 (2026-07-01): deterministic content hash of the SynthesisInput
+        # (minus snapshot_ts). Persisted here so the NEXT run can check
+        # "did anything actually change since last time" and skip the
+        # Sonnet call when the hash matches → saves ~$0.05/day on
+        # redundant cron runs. Empty string when caller predates v31.
+        "input_hash":               str(snapshot.get("input_hash", "")),
+        # v31: also stash whether this run was itself skipped by the
+        # hash-match short-circuit. Useful for ops audit ("A ran but
+        # didn't call Sonnet — nothing new") without having to infer
+        # from n_candidates==0.
+        "skipped_reason":           str(snapshot.get("skipped_reason", "")),
         # Phase 2.0 + Layer 4 attribution (2026-06-07):
         # the exact memory_file_ids A retrieved + saw during this synthesis.
         # Lets 6-month rollups answer "which doctrine entries are

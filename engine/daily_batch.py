@@ -112,18 +112,30 @@ def _is_first_trading_day_of_month(d: datetime.date) -> bool:
 
 
 def _is_month_end_trading_day(d: datetime.date) -> bool:
-    """True if d is the last NYSE trading day of its calendar month."""
+    """True if d is the last NYSE trading day of its calendar month.
+
+    2026-09-07 fix: the schedule used to start at `d` itself, so for any
+    trading day `sched.index[0] == d` and the old `sched.index[0].date() > d`
+    test was False by construction — the mcal branch returned False for
+    EVERY trading day, month-end included. `_patrol_rebalance` therefore
+    returned early on every run, so neither the auto-rebalance nor the
+    pending-approval rows it generates were ever produced. This stayed
+    latent until pandas_market_calendars was installed (2026-05-30); before
+    that the except-branch below (which is correct) was doing the work.
+    Starting the schedule at d+1 asks the intended question: is the NEXT
+    trading day in a different month?
+    """
     try:
         import pandas_market_calendars as mcal
         nyse  = mcal.get_calendar("NYSE")
         month_end = (d.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
         sched = nyse.schedule(
-            start_date=d.isoformat(),
+            start_date=(d + datetime.timedelta(days=1)).isoformat(),
             end_date=(month_end + datetime.timedelta(days=5)).isoformat(),
         )
         if sched.empty:
             return False
-        return sched.index[0].date() > d
+        return sched.index[0].date().month != d.month
     except Exception:
         next_weekday = d + datetime.timedelta(days=1)
         while next_weekday.weekday() >= 5:

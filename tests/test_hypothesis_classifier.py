@@ -73,6 +73,10 @@ def test_addresses_decay_in_classifies_sleeve_improvement():
     "Applying the Bonferroni correction to the set of 316 published factors",
     "The minimum t-ratio for 5% significance after multiple-testing correction is X",
     "Publication bias in factor research inflates the false discovery rate",
+    # v40: cost-audit claims that reference live/institutional trade data
+    # hit the METHODOLOGY_PATTERNS_CAPACITY rules — semantically equivalent
+    # to factor_analysis (both correctly filter out from cron).
+    "Asset pricing anomalies (size, value, momentum, short-term reversal) remain profitable after realistic trading costs estimated from live institutional trade data",
 ])
 def test_methodology_patterns_classified(claim):
     h = _h(claim=claim)
@@ -96,6 +100,12 @@ def test_methodology_patterns_classified(claim):
     "Liquidity variables are especially susceptible to microcap-driven inflation",
     "95 out of 102 (93%) trading frictions variables are insignificant after microcap exclusion",
     "Anomaly profits disappear when small-cap-driven returns are excluded",
+    # v40 (2026-07-01) — cost-robustness / replication verification.
+    # These claims hit ROUTER_REFUSAL_NEEDS_NEW_TEMPLATE in the
+    # 2026-07-01 15:18 burndown; classifier now catches upstream.
+    "Momentum (UMD) survives trading costs and delivers a significant net expected return of 5.37% per year",
+    "The Jegadeesh-Titman price momentum anomaly (prior 6-month returns) survives replication with NYSE breakpoints and value-weighted returns",
+    "Momentum returns net of realistic trading costs are 5.37% per year",
 ])
 def test_factor_analysis_patterns_classified(claim):
     h = _h(claim=claim)

@@ -176,7 +176,27 @@ FAMILY_OPTIMAL_W: dict[str, float] = {
     "SPANNING_CMA":       1.0,
 }
 GLOBAL_W_FALLBACK: float = 1.0
-_ENSEMBLE_MIN_ELIGIBLE_N: int = 3
+# v35 (2026-07-01): raised from 3 back to 5. Below-threshold families
+# fall back to the belief-1 pipeline output (FAMILY_PRIOR_OVERRIDES or
+# DEFAULT_PRIOR + Dirichlet smoothing) instead of getting purely
+# empirical replacement. At n=3, w=1.0 ensemble replaces the entire
+# prediction with raw empirical → 100% RED families like VOL_RISK_PREMIUM
+# (3 events, all RED) got GREEN=0.00 predictions, structurally blocking
+# any new experimental variation from ever being dispatched.
+#
+# Root cause identified 2026-07-01 during main-line audit: 6 fresh
+# VOL_RISK_PREMIUM specs (all router-clean, 4/6 PASSES) got GREEN=0.00
+# from ensemble blend because the family's 3 historical verdicts were
+# all RED. Different hypotheses (VIX filter / term-structure / delta-
+# hedged swap / SPX options straddle) with distinct experimental designs
+# all got tarred with the same 100% RED prediction.
+#
+# At threshold=5, families with 3-4 verdicts get override + smoothing:
+# small samples don't have enough evidence to justify pure empirical.
+# Families with n>=5 still get ensemble blend (well-observed → trust
+# empirical). This aligns with the v22 dying_families semantics (soft
+# 0.5x penalty, not hard kill).
+_ENSEMBLE_MIN_ELIGIBLE_N: int = 5
 
 
 def _raw_family_empirical_at(family: str) -> tuple[dict[str, float], int]:
@@ -187,6 +207,23 @@ def _raw_family_empirical_at(family: str) -> tuple[dict[str, float], int]:
     in the store, so calling this at prediction time only sees prior
     verdicts. Returns (dist, n_eligible). n_eligible = 0 → caller skips
     ensemble blend.
+
+    v36 (2026-07-01): dedup by subject_id, taking the LATEST verdict per
+    subject. Motivation: today's live audit found CARRY family had 32
+    factor_verdict_filed events across only 17 distinct subjects. One
+    subject (`tier_c_auto_b1_lens__carry`) alone contributed 15 of those
+    32 events — the same signal implementation was re-dispatched 15
+    times (probably during cost-stress sweeps), all landing RED. Pre-v36
+    treated each re-run as an independent sample → the empirical claimed
+    32 independent trials with 31 RED, when the honest measurement is
+    17 distinct implementations tried, 16 RED + 1 NEUTRAL. Dedup makes
+    belief reflect "how many DIFFERENT factors survived in this family"
+    rather than "how many total dispatch events landed."
+
+    Events are iterated in file order (append-only), so the last
+    occurrence in the store wins per subject. This mirrors
+    `belief_prior_calibration._autopsies_for_family` semantics (which
+    handles corrections via superseded_by).
     """
     try:
         from engine.research_store import store
@@ -195,9 +232,18 @@ def _raw_family_empirical_at(family: str) -> tuple[dict[str, float], int]:
         )
     except Exception:
         return {"GREEN": 0.0, "MARGINAL": 0.0, "RED": 0.0}, 0
-    counts = {"GREEN": 0, "MARGINAL": 0, "RED": 0}
+
+    # v36 dedup: subject_id → latest verdict string
+    latest_by_subject: dict[str, str] = {}
     for ev in events:
+        subj = str(getattr(ev, "subject_id", "") or "")
+        if not subj:
+            continue
         v = ev.verdict.value if hasattr(ev.verdict, "value") else str(ev.verdict)
+        latest_by_subject[subj] = v
+
+    counts = {"GREEN": 0, "MARGINAL": 0, "RED": 0}
+    for v in latest_by_subject.values():
         if v in counts:
             counts[v] += 1
     n = sum(counts.values())
@@ -302,9 +348,24 @@ def _family_observed_dist(family: str) -> tuple[dict[str, float], int]:
         logger.warning("belief: family_observed_dist read failed: %s", exc)
         return dict(DEFAULT_PRIOR), 0
 
-    counts = {"GREEN": 0, "MARGINAL": 0, "RED": 0}
+    # v37 (2026-07-01): propagate v36 subject_id dedup to this path too.
+    # `_family_observed_dist` is the base-dist fallback in predict_verdict
+    # when belief-4 calibration is absent — the same event-store rows the
+    # v36 dedup was meant to correct. Without this, CARRY still counts
+    # 31 verdicts across 17 subjects (one signal re-dispatched 15× during
+    # cost-stress sweeps landed 15 RED counts). The v36 dedup only fixed
+    # the ensemble-blend path; the pre-blend base dist was still inflated.
+    # Latest verdict per subject wins (events iterate in append-only order).
+    latest_by_subject: dict[str, str] = {}
     for ev in events:
+        subj = str(getattr(ev, "subject_id", "") or "")
+        if not subj:
+            continue
         v = ev.verdict.value if hasattr(ev.verdict, "value") else str(ev.verdict)
+        latest_by_subject[subj] = v
+
+    counts = {"GREEN": 0, "MARGINAL": 0, "RED": 0}
+    for v in latest_by_subject.values():
         if v in counts:
             counts[v] += 1
 

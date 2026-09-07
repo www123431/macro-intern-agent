@@ -249,6 +249,74 @@ def test_pre_dispatch_refuses_unknown_signal_input(tmp_log):
     assert "kaggle.scraped.weird" in r.metrics["violators"]
 
 
+def test_v41_pre_dispatch_accepts_futures_and_bond_prefixes(tmp_log):
+    """v41 (2026-07-02): PIT_CORRECT_SOURCES opens for cross-asset
+    signal_inputs — futures.settle.*, futures.excess_return.commodity.*,
+    bond.return.* map to real cached data (cmdty_settle 4.2M rows,
+    bondret_panel 2.7M rows) that predates v41 but was never wired.
+
+    Regression: these prefixes must pass Gate #8 whitelist check.
+    fx.forward.* deliberately still refuses (v43 will add via CIP)."""
+    from engine.agents.strengthener.factor_dispatcher import pre_dispatch_check
+
+    # futures + bond prefixes now pass
+    for si in (
+        "futures.settle.CL2604",
+        "futures.excess_return.commodity.GC_frontmonth",
+        "bond.return.912828XG5",
+    ):
+        r = pre_dispatch_check(_spec(signal_inputs=(si,)),
+                                 spec_approved=True, family_hint="X",
+                                 log_path=tmp_log)
+        # r may be None (passed) OR fail for a DIFFERENT reason
+        # (template / family cap) — but NEVER SIGNAL_INPUT_UNKNOWN.
+        if r is not None:
+            assert r.reason_code != "SIGNAL_INPUT_UNKNOWN", (
+                f"v41 prefix {si!r} still refused as unknown signal input"
+            )
+
+    # v43 (2026-07-02) update: fx.forward.* now passes because the
+    # existing carry_g10_fx template uses LRV rate-differential as
+    # forward-discount proxy (CIP). Regression that it does NOT
+    # SIGNAL_INPUT_UNKNOWN — may still fail downstream for other
+    # reasons (no template contract, family cap) but never here.
+    r = pre_dispatch_check(_spec(
+        signal_inputs=("fx.forward.1m.EURUSD",)
+    ), spec_approved=True, family_hint="X", log_path=tmp_log)
+    if r is not None:
+        assert r.reason_code != "SIGNAL_INPUT_UNKNOWN"
+
+    # Something clearly NOT whitelisted must still refuse
+    r = pre_dispatch_check(_spec(
+        signal_inputs=("kaggle.scraped.pension_flows",)
+    ), spec_approved=True, family_hint="X", log_path=tmp_log)
+    assert r is not None
+    assert r.reason_code == "SIGNAL_INPUT_UNKNOWN"
+
+
+def test_v43_pre_dispatch_accepts_fx_forward_aliases(tmp_log):
+    """v43 (2026-07-02): fx.forward.* / fx.forward_discount.* /
+    fx.spot_rate.* are aliases for the already-cached fx rate machinery.
+    Existing carry_g10_fx template computes forward discount via LRV
+    lagged interest-rate-differential (covered-interest-parity proxy).
+    Whitelist opens the door so LLM-extracted specs referencing "forward
+    discount" language directly (as papers do) pass Gate #8.
+    """
+    from engine.agents.strengthener.factor_dispatcher import pre_dispatch_check
+    for si in (
+        "fx.forward.1m.EURUSD",
+        "fx.forward_discount.1m.G10",
+        "fx.spot_rate.usd",
+    ):
+        r = pre_dispatch_check(_spec(signal_inputs=(si,)),
+                                 spec_approved=True, family_hint="X",
+                                 log_path=tmp_log)
+        if r is not None:
+            assert r.reason_code != "SIGNAL_INPUT_UNKNOWN", (
+                f"v43 alias {si!r} still refused as unknown signal input"
+            )
+
+
 def test_pre_dispatch_escape_hatch_skips_signal_input_check(tmp_log):
     """requires_custom_code escape hatch passes the whitelist gate
     even with unwhitelisted inputs — human takes over anyway."""

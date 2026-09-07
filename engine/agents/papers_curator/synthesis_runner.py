@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import dataclasses as _dc
 import datetime as _dt
+import hashlib as _hashlib
+import json as _json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -37,6 +39,59 @@ from engine.agents.papers_curator.synthesis_context import build_synthesis_input
 from engine.agents.papers_curator.synthesis_writer import write_synthesized_candidates
 
 logger = logging.getLogger(__name__)
+
+
+# ── v31 (2026-07-01): Sonnet-skip when nothing changed ────────────────
+
+
+def _synthesis_input_hash(si) -> str:
+    """Deterministic content hash of a SynthesisInput. Excludes
+    snapshot_ts (which changes every run — including it would defeat
+    the whole cache). Includes every content-bearing field, so any
+    genuine change (new paper summary, new event, new doctrine hit,
+    new sleeve status, new anchor, new belief-family row) shifts the
+    hash → Sonnet gets called on real change; skipped on redundant
+    daily re-runs.
+
+    Determinism verified: two consecutive build_synthesis_input()
+    invocations on the same corpus yield the same 64-char sha256.
+    """
+    parts = {
+        "summaries":   [_dc.asdict(s) for s in si.recent_summaries],
+        "sleeves":     [_dc.asdict(s) for s in si.deployed_sleeves],
+        "events":      [_dc.asdict(s) for s in si.recent_events],
+        "doctrine":    [_dc.asdict(d) for d in si.doctrine_snippets],
+        "anchors":     [_dc.asdict(a) for a in si.anchor_library],
+        # belief_layer_summary is a tuple of plain dicts/tuples per
+        # build_belief_summary — pass through as-is
+        "belief":      list(si.belief_layer_summary),
+    }
+    blob = _json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
+    return _hashlib.sha256(blob).hexdigest()
+
+
+def _last_synthesis_input_hash() -> Optional[str]:
+    """Look up the input_hash on the most recent
+    papers_curator_synthesis_run event. Returns None if none exists
+    or none carried the field (pre-v31 events, or first-ever run).
+
+    Failure-safe: any exception (store missing, corrupted rows,
+    permission error) returns None → v31 falls back to running Sonnet.
+    Never blocks the pipeline on this lookup."""
+    try:
+        from engine.research_store import store
+        evs = store.filter_events(
+            event_type = "papers_curator_synthesis_run",
+            limit      = 1,
+        )
+        if not evs:
+            return None
+        ev = evs[-1]
+        metrics = getattr(ev, "metrics", None) or {}
+        hv = metrics.get("input_hash")
+        return str(hv) if hv else None
+    except Exception:
+        return None
 
 
 def _candidate_to_payload(c: SynthesizedCandidate) -> dict:
@@ -157,6 +212,13 @@ def run_synthesis_pipeline(
             "recent_events":     len(si.recent_events),
             "doctrine_snippets": len(si.doctrine_snippets),
         }
+        # v31 (2026-07-01): input_hash lets the next run know whether
+        # the SI content has actually changed, so we can skip Sonnet
+        # (~$0.05/call) on a redundant no-change cron. Deterministic
+        # across the SI content minus snapshot_ts. See
+        # _synthesis_input_hash docstring for the fields hashed.
+        current_input_hash = _synthesis_input_hash(si)
+        result["snapshot"]["input_hash"] = current_input_hash
         # Capture doctrine snippet IDs A actually saw — feeds the
         # Layer 4 attribution rollup ("which doctrine entries lead to
         # GREEN candidates?"). See attribution module.
@@ -169,6 +231,40 @@ def run_synthesis_pipeline(
     except Exception as exc:
         logger.exception("synthesis_runner: gather failed")
         result["errors"].append(f"gather: {exc}")
+        return result
+
+    # v31: skip Sonnet if the input hash matches the last emitted run.
+    # The audit event still fires (n_candidates=0 + skipped_reason)
+    # so ops can see "A ran; input unchanged, no LLM call". Real work
+    # happens as soon as summaries.jsonl / events.jsonl grows.
+    last_hash = _last_synthesis_input_hash()
+    if last_hash and last_hash == current_input_hash:
+        result["skipped_reason"] = "input_unchanged_since_last_run"
+        # Stash skipped_reason into snapshot dict so the emit call
+        # persists it into event metrics (see emit.papers_curator_
+        # synthesis_run v31 pass-through fields).
+        result["snapshot"]["skipped_reason"] = result["skipped_reason"]
+        # Emit the audit event so the run is still visible to
+        # ops_watchdog + observability (step 4c invariant preserved).
+        try:
+            from engine.research_store import emit
+            event_id = emit.papers_curator_synthesis_run(
+                n_candidates        = 0,
+                n_written           = 0,
+                snapshot            = result["snapshot"],
+                candidates          = [],
+                errors              = [],
+                dry_run             = dry_run,
+                doctrine_snippet_ids= result.get("doctrine_snippet_ids", []),
+            )
+            result["event_id"] = event_id
+        except Exception as exc:
+            logger.exception("synthesis_runner: emit on skip failed")
+            result["errors"].append(f"emit_on_skip: {exc}")
+        logger.info(
+            "synthesis_runner: skipped Sonnet (input_hash=%s unchanged); "
+            "emit event_id=%s", current_input_hash[:12], result["event_id"],
+        )
         return result
 
     try:

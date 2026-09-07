@@ -192,6 +192,37 @@ PIT_CORRECT_SOURCES: frozenset[str] = frozenset({
     # final at session close. Used as long-duration Treasury price
     # proxy in vrp_treasury template (MOVE-vs-realized-vol pair).
     "tlt.",                      # Bond-VRP template (MVP 2026-06-22)
+
+    # v41 (2026-07-02): opens dispatch for cross-asset carry / TSMOM.
+    # Data cached long before (2000-01-03..2026-05-27 for cmdty, full
+    # bondret panel) but was NOT wired into PIT_CORRECT_SOURCES → every
+    # CARRY / commodity_carry spec's factor_spec_extractor output
+    # (`futures.settle.<code>`, `futures.excess_return.commodity.<code>`,
+    # `bond.return.<cusip>`) failed Gate #8 SIGNAL_INPUT_UNKNOWN even
+    # though we have the data.
+    #
+    # Precise prefixes (NOT a broad `futures.`): specs like
+    # `futures.monthly_excess_return.fx_forward.g10` will STILL refuse
+    # because we don't have FX forward data. Broad-whitelisting would
+    # silently pass those and produce garbage verdicts.
+    "futures.settle.",              # cmdty_settle.parquet raw (4.2M rows, 2000-2026)
+    "futures.excess_return.commodity.",   # derived from settle + roll
+    "bond.return.",                 # bondret_panel.parquet (2.7M rows corp bonds)
+
+    # v43 (2026-07-02): fx.forward / fx.forward_discount aliases.
+    # These paths ARE covered — the existing carry_g10_fx template
+    # uses LRV 2011 lagged interest-rate-differential as the forward-
+    # discount proxy per covered-interest-parity (rdiff_<CCY>_pct
+    # from engine.research.fx_carry_anchors). CIP: F/S ≈ exp((r_l -
+    # r_usd) × τ); the LRV convention takes ln(F/S) ≈ (r_l - r_usd) × τ
+    # so a "forward discount" input is a rebadged rate differential.
+    # These prefixes let LLM-extracted specs REFERENCE the concept
+    # they read in the paper without failing whitelist; template
+    # picks up the actual rate-differential parquet regardless.
+    # No new fetcher — data is fx.interest_rate.* already whitelisted.
+    "fx.forward.",
+    "fx.forward_discount.",
+    "fx.spot_rate.",                # alias for fx.spot.* (LLM prompt drift)
 })
 
 
@@ -320,14 +351,31 @@ def _cross_sec_template_lazy(spec: FactorSpec) -> "TemplateResult":
 
 
 def _carry_template_lazy(spec: FactorSpec) -> "TemplateResult":
-    """Lazy-import wrapper around template_carry_g10_fx (C-2f).
-    Other carry universes (commodity_futures_27, us_treasury_curve)
-    escape-hatch to _template_pending_build until their fetchers ship."""
-    from engine.agents.strengthener.templates.carry_g10_fx import (
-        template_carry_g10_fx,
-    )
+    """Lazy-import wrapper for all carry-family templates. Routes by
+    universe: fx_g10 → carry_g10_fx (C-2f); commodity_futures_24 →
+    commodity_carry_futures (v42). Other universes (us_treasury_curve
+    etc.) escape-hatch to _template_pending_build until their fetchers
+    ship."""
     if spec.universe == "fx_g10":
+        from engine.agents.strengthener.templates.carry_g10_fx import (
+            template_carry_g10_fx,
+        )
         return template_carry_g10_fx(spec)
+    if spec.universe == "commodity_futures_24":
+        from engine.agents.strengthener.templates.commodity_carry_futures import (
+            template_commodity_carry_futures,
+        )
+        return template_commodity_carry_futures(spec)
+    if spec.universe == "corporate_bonds_ig_hy":
+        from engine.agents.strengthener.templates.bond_credit_carry import (
+            template_bond_credit_carry,
+        )
+        return template_bond_credit_carry(spec)
+    if spec.universe == "us_treasury_curve":
+        from engine.agents.strengthener.templates.treasury_term_carry import (
+            template_treasury_term_carry,
+        )
+        return template_treasury_term_carry(spec)
     return _template_pending_build(spec)
 
 
@@ -429,8 +477,58 @@ TEMPLATE_REGISTRY: dict[str, Callable[[FactorSpec], TemplateResult]] = {
     "vrp":                    _vrp_lazy,                 # SHIPPED 2026-06-13 (Carr-Wu 2009 short-vol on SPX)
     "skew_premium":           _spx_skew_premium_lazy,    # SHIPPED 2026-06-14 (Bollerslev-Todorov 2011 SPX skew)
     "event_drift":            _event_drift_lazy,         # SHIPPED 2026-06-13 (Bernard-Thomas 1989 PEAD on smallcap fundq)
+    "ml_ensemble":            None,                       # bound below (v45)
+    "ml_size_only":           None,                       # bound below (v46)
+    "quality_composite":      None,                       # bound below (v50)
+    "iv_atm_cross_sec":       None,                       # bound below (v52)
     "requires_custom_code":   _template_custom_code_escape,
 }
+
+
+def _ml_ensemble_template_lazy(spec: FactorSpec) -> "TemplateResult":
+    """Lazy-import wrapper around template_ml_ensemble_combiner (v45)."""
+    from engine.agents.strengthener.templates.ml_ensemble_combiner import (
+        template_ml_ensemble_combiner,
+    )
+    if spec.universe == "us_equities_top_3000":
+        return template_ml_ensemble_combiner(spec)
+    return _template_pending_build(spec)
+
+
+def _ml_size_only_template_lazy(spec: FactorSpec) -> "TemplateResult":
+    """Lazy-import wrapper around template_ml_size_only (v46)."""
+    from engine.agents.strengthener.templates.ml_size_only import (
+        template_ml_size_only,
+    )
+    if spec.universe == "us_equities_top_3000":
+        return template_ml_size_only(spec)
+    return _template_pending_build(spec)
+
+
+def _qmj_composite_template_lazy(spec: FactorSpec) -> "TemplateResult":
+    """Lazy-import wrapper around template_qmj_composite (v50)."""
+    from engine.agents.strengthener.templates.qmj_composite import (
+        template_qmj_composite,
+    )
+    if spec.universe == "us_equities_top_3000":
+        return template_qmj_composite(spec)
+    return _template_pending_build(spec)
+
+
+def _iv_atm_template_lazy(spec: FactorSpec) -> "TemplateResult":
+    """Lazy-import wrapper around template_iv_atm_cross_sectional (v52)."""
+    from engine.agents.strengthener.templates.iv_atm_cross_sectional import (
+        template_iv_atm_cross_sectional,
+    )
+    if spec.universe == "us_equities_top_3000":
+        return template_iv_atm_cross_sectional(spec)
+    return _template_pending_build(spec)
+
+
+TEMPLATE_REGISTRY["ml_ensemble"]       = _ml_ensemble_template_lazy
+TEMPLATE_REGISTRY["ml_size_only"]      = _ml_size_only_template_lazy
+TEMPLATE_REGISTRY["quality_composite"] = _qmj_composite_template_lazy
+TEMPLATE_REGISTRY["iv_atm_cross_sec"]  = _iv_atm_template_lazy
 
 
 # ────────────────────────────────────────────────────────────────────
